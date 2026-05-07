@@ -1,1 +1,1 @@
-# Elasticsearch agentic script sorting
+# Agentic eval-driven development for Elasticsearch script sorting
