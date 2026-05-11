@@ -226,8 +226,8 @@ __marimo__/
 plans/
 tasks/
 
-# Local data files
-data/
+# Local data files (top-level dataset dumps only; src/es_script_agent/data/ is package code)
+/data/
 
 # Run artefacts (per-run snapshots, JSONL logs)
 runs/
