@@ -10,7 +10,7 @@ Out of scope: production deployment, multi-user serving, model training, online 
 
 ## Stack
 
-- Python 3.13, managed with `uv` (already initialised). Run everything through `uv run …`.
+- Python 3.13, managed with `uv` (already initialized). Run everything through `uv run …`.
 - Elasticsearch 8.13.4, single node, security off, via `docker compose`. Client pinned to `elasticsearch==8.13.*` (matches server major).
 - LangGraph + LangChain for the agent loop; `langchain-anthropic` and `langchain-openai` as provider adapters.
 - Pydantic for state types (`IterationRecord`, `EvalResult`, `AgentState`); dataclasses fine elsewhere.
@@ -39,11 +39,12 @@ Env vars (`.env`, gitignored): `ES_URL`, `LLM_PROVIDER`, `ANTHROPIC_API_KEY`, `O
 - Pure functions for metrics + query building; side-effectful I/O isolated to `es_client.py`, `runlog.py`, `indices/load.py`.
 - No global mutable state. ES client created once at the CLI entry, threaded through.
 - `logging`, not `print`, except for one-shot CLI status lines.
-- Comments only where a non-obvious *why* matters (Painless quirks, ES version-specific behaviour, metric edge cases). Don't narrate what the code does.
+- Comments only where a non-obvious *why* matters (Painless quirks, ES version-specific behavior, metric edge cases). Don't narrate what the code does.
+- Docstrings use Google format (`Args:` / `Returns:` / `Raises:` / `Attributes:` sections), not reStructuredText or NumPy style.
 
 ## Architectural invariants (the things easy to break)
 
-- **Dataset access goes through `data/adapters/`.** Eval, indexing, and agent code consume normalised `Item`/`User`/`Interaction` only — no Elasticsearch field names outside the adapter. New datasets ship as a new adapter module.
+- **Dataset access goes through `data/adapters/`.** Eval, indexing, and agent code consume normalized `Item`/`User`/`Interaction` only — no Elasticsearch field names outside the adapter. New datasets ship as a new adapter module.
 - **Harness owns the query/sort JSON shape.** The agent edits only Painless `source` strings + the count of sort scripts (up to `--max-sort-scripts`). Tie-break is `_score desc`. `params.user_vector` is the user representation and is not renamed or stripped.
 - **`params.user_vector` is 10 × 32.** Users carry 10 vectors of 32 dims each; items carry one 32-dim vector indexed as `item_vector`. The baseline mean-pools inside Painless; the agent can experiment with other pooling strategies inside the source body.
 - **Run snapshots are immutable.** Before evaluating, snapshot `query.painless` + `sort_NN.painless` to `runs/<ts>/iter_NNN/`. JSONL points at the snapshot paths. Compile failures still snapshot the failing source.

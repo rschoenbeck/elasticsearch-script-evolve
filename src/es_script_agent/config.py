@@ -1,4 +1,4 @@
-"""Centralised configuration: env-var loading + path constants.
+"""Centralized configuration: env-var loading + path constants.
 
 Loaded once at import time. Callers read attributes directly; do not mutate.
 """
