@@ -4,10 +4,18 @@ Loaded once at import time. Callers read attributes directly; do not mutate.
 """
 
 from __future__ import annotations
+
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+
+def _find_repo_root() -> Path:
+    for p in Path(__file__).resolve().parents:
+        if (p / "pyproject.toml").is_file():
+            return p
+    raise RuntimeError("repo root not found (no pyproject.toml in any parent)")
 
 
 _REPO_ROOT = _find_repo_root()
@@ -25,11 +33,3 @@ SCRIPTS_DIR: Path = _REPO_ROOT / "scripts"
 RELEVANCE_THRESHOLD: float = 1
 ILD_DIVERSITY_FIELDS: tuple[str, ...] = ("sector", "country", "partnerId")
 DEFAULT_OBJECTIVE: str = "ndcg"
-
-
-def _find_repo_root() -> Path:
-    for p in Path(__file__).resolve().parents:
-        if (p / "pyproject.toml").is_file():
-            return p
-    raise RuntimeError("repo root not found (no pyproject.toml in any parent)")
-

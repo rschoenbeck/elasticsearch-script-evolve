@@ -33,10 +33,10 @@ class Item(BaseModel):
 class User(BaseModel):
     """A user represented by one or more dense vectors of equal dimension.
 
-    The vector is 2D so a single user can carry multiple embeddings
-    (FLSS users carry 10×32). Single-vector adapters wrap as ``[vec]``.
-    The harness passes the whole 2D list as ``params.user_vector``;
-    pooling strategies live inside the Painless source.
+    The vector is 2D so a single user can carry multiple embeddings.
+    Single-vector adapters wrap as ``[vec]``. The harness passes the
+    whole 2D list as ``params.user_vector``; pooling strategies live
+    inside the Painless source.
 
     Attributes:
         id: Stable identifier used as the ES document id.

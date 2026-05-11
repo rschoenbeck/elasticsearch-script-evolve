@@ -1,4 +1,4 @@
-"""Dataset adapter layer (SPEC §3a / boundary §6.6).
+"""Dataset adapter layer.
 
 All dataset access flows through ``DatasetAdapter`` implementations
 that yield the normalized types in ``data.schema``. Eval, indexing,
@@ -18,7 +18,7 @@ __all__ = ["DatasetAdapter", "Interaction", "Item", "User", "load_dataset"]
 # accepted by `load_dataset` (no ValueError) but raise NotImplementedError
 # until their adapter lands. Lets schema-level tests run before adapters
 # exist.
-_REGISTERED: frozenset[str] = frozenset({"flss"})
+_REGISTERED: frozenset[str] = frozenset({"default"})
 
 
 @runtime_checkable
@@ -47,7 +47,7 @@ def load_dataset(name: str) -> DatasetAdapter:
     """Return the registered adapter for ``name``.
 
     Args:
-        name: Registered dataset name (e.g. ``"flss"``).
+        name: Registered dataset name (e.g. ``"default"``).
 
     Returns:
         An instantiated ``DatasetAdapter``.
@@ -61,12 +61,12 @@ def load_dataset(name: str) -> DatasetAdapter:
         raise ValueError(
             f"Unknown dataset {name!r}. Registered: {sorted(_REGISTERED)}"
         )
-    if name == "flss":
+    if name == "default":
         try:
-            from es_script_agent.data.adapters.flss import FlssAdapter
+            from es_script_agent.data.adapters.default import DefaultAdapter
         except ImportError as exc:
             raise NotImplementedError(
-                "FLSS adapter not yet implemented (Task 5)"
+                "Default adapter not yet implemented"
             ) from exc
-        return FlssAdapter()
+        return DefaultAdapter()
     raise NotImplementedError(f"Adapter for {name!r} is registered but not wired up")

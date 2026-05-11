@@ -25,7 +25,7 @@ Keep dependencies minimal — if you find yourself adding a package, check that 
 |---|---|
 | `docker compose up -d` / `down -v` | Start / stop+wipe local ES |
 | `uv sync` | Install deps |
-| `uv run setup-indices [--dataset flss]` | Drop+recreate `loans` and `users` indices, bulk-load from `data/*.json` |
+| `uv run setup-indices [--dataset default]` | Drop+recreate `loans` and `users` indices, bulk-load from `data/*.json` |
 | `uv run baseline` | Run baseline script set once; print + log metrics |
 | `uv run rl-loop --iters N [--provider …] [--max-sort-scripts N] [--objective ndcg\|ild]` | Agentic improvement loop |
 | `uv run eval --query <path> [--sort <path> …]` | Re-evaluate a saved script set |

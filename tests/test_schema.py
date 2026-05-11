@@ -53,13 +53,13 @@ def test_load_dataset_unknown_raises() -> None:
         load_dataset("does-not-exist")
 
 
-def test_load_dataset_flss_is_registered() -> None:
-    # The FLSS adapter implementation arrives in Task 5; for now we only
-    # require that "flss" is a known name (no ValueError), distinct from
-    # the generic unknown-name failure mode.
+def test_load_dataset_default_is_registered() -> None:
+    # The adapter implementation arrives later; for now we only require
+    # that "default" is a known name (no ValueError), distinct from the
+    # generic unknown-name failure mode.
     try:
-        load_dataset("flss")
+        load_dataset("default")
     except ValueError:
-        pytest.fail("'flss' should be a registered dataset name")
+        pytest.fail("'default' should be a registered dataset name")
     except NotImplementedError:
-        pass  # acceptable until Task 5
+        pass  # acceptable until the adapter lands
