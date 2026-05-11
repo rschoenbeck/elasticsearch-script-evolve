@@ -1,7 +1,40 @@
 [project]
 name = "elasticsearch-agentic-script-sorting"
 version = "0.1.0"
-description = "Add your description here"
+description = "Agentic eval-driven development for Elasticsearch script sorting"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "elasticsearch==8.13.*",
+    "langgraph",
+    "langchain",
+    "langchain-anthropic",
+    "langchain-openai",
+    "pydantic",
+    "python-dotenv",
+    "numpy",
+    "pandas",
+    "pytest",
+    "jupyterlab",
+    "ruff",
+]
+
+[project.scripts]
+setup-indices = "es_script_agent.cli:setup_indices_cmd"
+baseline = "es_script_agent.cli:baseline_cmd"
+rl-loop = "es_script_agent.cli:rl_loop_cmd"
+eval = "es_script_agent.cli:eval_cmd"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/es_script_agent"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
