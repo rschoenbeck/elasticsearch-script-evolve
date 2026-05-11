@@ -31,7 +31,7 @@ _REQUIRED_ATTRIBUTES: tuple[str, ...] = (
 
 _USER_VECTOR_KEYS: tuple[str, ...] = tuple(f"vector{i}" for i in range(1, 11))
 
-_CSV_LOAN_COL = "Loan Details Kiva Loan ID"
+_CSV_LOAN_COL = "Loan Details Loan ID"
 _CSV_USER_COL = "User Details Login ID"
 _CSV_COUNT_COL = "Measures: Actions Number of 'Add to Basket' Sessions"
 
