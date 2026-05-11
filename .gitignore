@@ -224,6 +224,14 @@ __marimo__/
 
 # Local temp plans
 plans/
+tasks/
 
 # Local data files
 data/
+
+# Run artefacts (per-run snapshots, JSONL logs)
+runs/
+
+# Private reference scripts seeded to the agent as few-shot examples;
+# scripts/baseline/ remains tracked.
+scripts/reference/
