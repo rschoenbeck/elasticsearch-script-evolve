@@ -30,6 +30,17 @@ DATA_DIR: Path = _REPO_ROOT / "data"
 RUNS_DIR: Path = _REPO_ROOT / "runs"
 SCRIPTS_DIR: Path = _REPO_ROOT / "scripts"
 
+
+def _data_path(env_var: str, default_filename: str) -> Path:
+    raw = os.getenv(env_var, default_filename)
+    p = Path(raw)
+    return p if p.is_absolute() else DATA_DIR / p
+
+
+DEFAULT_LOANS_PATH: Path = _data_path("DEFAULT_LOANS_PATH", "loans.jsonl")
+DEFAULT_USERS_PATH: Path = _data_path("DEFAULT_USERS_PATH", "users.jsonl")
+DEFAULT_INTERACTIONS_PATH: Path = _data_path("DEFAULT_INTERACTIONS_PATH", "interactions.csv")
+
 RELEVANCE_THRESHOLD: float = 1
 ILD_DIVERSITY_FIELDS: tuple[str, ...] = ("sector", "country", "partnerId")
 DEFAULT_OBJECTIVE: str = "ndcg"
