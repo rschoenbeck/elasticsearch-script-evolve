@@ -232,6 +232,9 @@ data/
 # Run artefacts (per-run snapshots, JSONL logs)
 runs/
 
-# Private reference scripts seeded to the agent as few-shot examples;
-# scripts/baseline/ remains tracked.
+# Private scripts kept out of version control:
+#   scripts/reference/ — few-shot examples seeded to the agent
+#   scripts/baseline/ — actual baseline query + sort sequence used at runtime
+# Generic, committable baseline scripts will be added in a later update.
 scripts/reference/
+scripts/baseline/
