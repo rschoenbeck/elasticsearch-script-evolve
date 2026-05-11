@@ -29,6 +29,9 @@ _REQUIRED_ATTRIBUTES: tuple[str, ...] = (
     "popularityScore",
 )
 
+# Use these keys to extract user and item vectors
+_VECTOR_VERSION_KEY = "vectorVersionB"
+_ITEM_VECTOR_KEY = "itemVector"
 _USER_VECTOR_KEYS: tuple[str, ...] = tuple(f"vector{i}" for i in range(1, 11))
 
 _CSV_LOAN_COL = "Loan Details Loan ID"
@@ -112,8 +115,8 @@ def _item_from_source(src: dict[str, Any]) -> Item:
     loan_id = src.get("loanId")
     if loan_id is None:
         raise ValueError("loan record missing required field 'loanId'")
-    vector_block = src.get("vectorVersionB") or {}
-    vector = vector_block.get("itemVector")
+    vector_block = src.get(_VECTOR_VERSION_KEY) or {}
+    vector = vector_block.get(_ITEM_VECTOR_KEY)
     if vector is None:
         raise ValueError(f"loan {loan_id!r} missing required 'vectorVersionB.itemVector'")
     attributes = {key: src.get(key) for key in _REQUIRED_ATTRIBUTES}
@@ -124,7 +127,7 @@ def _user_from_source(src: dict[str, Any]) -> User:
     user_id = src.get("userId")
     if user_id is None:
         raise ValueError("user record missing required field 'userId'")
-    vector_block = src.get("vectorVersionB") or {}
+    vector_block = src.get(_VECTOR_VERSION_KEY) or {}
     vectors: list[list[float]] = []
     for key in _USER_VECTOR_KEYS:
         v = vector_block.get(key)
