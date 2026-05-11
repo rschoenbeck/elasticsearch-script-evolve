@@ -18,6 +18,12 @@ def _find_repo_root() -> Path:
     raise RuntimeError("repo root not found (no pyproject.toml in any parent)")
 
 
+def _data_path(env_var: str, default_filename: str) -> Path:
+    raw = os.getenv(env_var, default_filename)
+    p = Path(raw)
+    return p if p.is_absolute() else DATA_DIR / p
+
+
 _REPO_ROOT = _find_repo_root()
 load_dotenv(_REPO_ROOT / ".env")
 
@@ -29,13 +35,6 @@ OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 DATA_DIR: Path = _REPO_ROOT / "data"
 RUNS_DIR: Path = _REPO_ROOT / "runs"
 SCRIPTS_DIR: Path = _REPO_ROOT / "scripts"
-
-
-def _data_path(env_var: str, default_filename: str) -> Path:
-    raw = os.getenv(env_var, default_filename)
-    p = Path(raw)
-    return p if p.is_absolute() else DATA_DIR / p
-
 
 DEFAULT_LOANS_PATH: Path = _data_path("DEFAULT_LOANS_PATH", "loans.jsonl")
 DEFAULT_USERS_PATH: Path = _data_path("DEFAULT_USERS_PATH", "users.jsonl")
