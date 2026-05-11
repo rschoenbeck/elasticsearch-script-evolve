@@ -1,1 +1,1 @@
-# Agentic eval-driven development for Elasticsearch script sorting
+# Evolutionary agentic retrieval script optimization for Elasticsearch
