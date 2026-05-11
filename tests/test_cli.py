@@ -1,4 +1,4 @@
-"""Skeleton checks: package imports and CLI stubs raise NotImplementedError."""
+"""Skeleton checks: package imports and unimplemented CLI stubs still raise."""
 
 import importlib
 
@@ -11,7 +11,7 @@ def test_package_imports() -> None:
 
 @pytest.mark.parametrize(
     "func_name",
-    ["setup_indices_cmd", "baseline_cmd", "rl_loop_cmd", "eval_cmd"],
+    ["baseline_cmd", "rl_loop_cmd", "eval_cmd"],
 )
 def test_cli_stub_raises_not_implemented(func_name: str) -> None:
     cli = importlib.import_module("es_script_agent.cli")
