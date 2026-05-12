@@ -114,37 +114,68 @@ def test_missing_loan_id_raises(tmp_path: Path, adapter: DefaultAdapter) -> None
         list(a.iter_items())
 
 
-def test_missing_item_vector_raises(tmp_path: Path, adapter: DefaultAdapter) -> None:
+def test_items_missing_item_vector_are_skipped_with_warning(
+    tmp_path: Path,
+    adapter: DefaultAdapter,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Item dumps include partial records sourced upstream; one missing
+    # vector shouldn't abort the whole load. Skip the record, warn once.
     bad = tmp_path / "loans.jsonl"
-    bad.write_text('{"_source": {"loanId": "X"}}\n')
+    good = (
+        '{"_source": {"loanId": "L1", "vectorVersionB": {"itemVector": '
+        + str([0.0] * 32)
+        + "}}}\n"
+    )
+    missing = '{"_source": {"loanId": "L2"}}\n'
+    bad.write_text(good + missing)
     a = DefaultAdapter(
         loans_path=bad,
         users_path=adapter.users_path,
         interactions_path=adapter.interactions_path,
     )
-    with pytest.raises(ValueError, match="itemVector"):
-        list(a.iter_items())
+
+    with caplog.at_level("WARNING", logger="es_script_agent.data.adapters.default"):
+        items = list(a.iter_items())
+
+    assert [i.id for i in items] == ["L1"]
+    assert any("skipped 1 loan record" in r.getMessage() for r in caplog.records)
 
 
-def test_missing_user_vector_slot_raises(tmp_path: Path, adapter: DefaultAdapter) -> None:
-    # User missing vector5 → hard fail (vectors are required).
-    bad = tmp_path / "users.jsonl"
-    src = {
-        "_source": {
-            "userId": "U-bad",
-            "vectorVersionB": {f"vector{i}": [0.0] * 32 for i in range(1, 11) if i != 5},
-        }
-    }
+def test_users_missing_vector_slot_are_skipped_with_warning(
+    tmp_path: Path,
+    adapter: DefaultAdapter,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     import json as _json
 
-    bad.write_text(_json.dumps(src) + "\n")
+    good_src = {
+        "_source": {
+            "userId": "U-good",
+            "vectorVersionB": {f"vector{i}": [0.0] * 32 for i in range(1, 11)},
+        }
+    }
+    bad_src = {
+        "_source": {
+            "userId": "U-bad",
+            "vectorVersionB": {
+                f"vector{i}": [0.0] * 32 for i in range(1, 11) if i != 5
+            },
+        }
+    }
+    bad = tmp_path / "users.jsonl"
+    bad.write_text(_json.dumps(good_src) + "\n" + _json.dumps(bad_src) + "\n")
     a = DefaultAdapter(
         loans_path=adapter.loans_path,
         users_path=bad,
         interactions_path=adapter.interactions_path,
     )
-    with pytest.raises(ValueError, match="vector5"):
-        list(a.iter_users())
+
+    with caplog.at_level("WARNING", logger="es_script_agent.data.adapters.default"):
+        users = list(a.iter_users())
+
+    assert [u.id for u in users] == ["U-good"]
+    assert any("skipped 1 user record" in r.getMessage() for r in caplog.records)
 
 
 def test_load_dataset_default_returns_adapter() -> None:
