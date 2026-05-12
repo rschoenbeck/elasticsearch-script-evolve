@@ -40,7 +40,7 @@ def ndcg_at_k(ranked_ids: list[str], relevant_ids: set[str], k: int) -> float:
     return dcg / idcg
 
 
-def recall_at_k(ranked_ids: list[str], relevant_ids: set[str], k: int) -> float:
+def recall_at_k(ranked_ids: list[str], relevant_ids: set[str], k: int) -> float | None:
     """Fraction of relevant items recovered in the top-K.
 
     Args:
@@ -49,10 +49,13 @@ def recall_at_k(ranked_ids: list[str], relevant_ids: set[str], k: int) -> float:
         k: Cutoff position.
 
     Returns:
-        Recall in [0.0, 1.0]. Zero when the relevant set is empty.
+        Recall in [0.0, 1.0], or ``None`` when the relevant set is empty
+        (recall is undefined with no positives). Callers should exclude
+        empty-ground-truth users upstream; the ``None`` return is a loud
+        signal that this contract was violated rather than a silent zero.
     """
     if not relevant_ids:
-        return 0.0
+        return None
     hits = sum(1 for item_id in ranked_ids[:k] if item_id in relevant_ids)
     return hits / len(relevant_ids)
 
@@ -101,14 +104,19 @@ def ild_at_k(
         Mean pairwise distance in [0.0, 1.0], or ``None`` when fewer than
         two hits are available (diversity is undefined). Callers should
         exclude ``None`` from aggregation.
+
+    Raises:
+        ValueError: If ``fields`` is empty — diversity is undefined with
+            no fields to compare on.
     """
+    if not fields:
+        raise ValueError("ild_at_k requires at least one diversity field")
     topk = ranked_items[:k]
     if len(topk) < 2:
         return None
-    field_list = list(fields)
-    n_fields = len(field_list)
+    n_fields = len(fields)
     pair_distances = [
-        sum(1 for f in field_list if a.get(f) != b.get(f)) / n_fields
+        sum(1 for f in fields if a.get(f) != b.get(f)) / n_fields
         for a, b in combinations(topk, 2)
     ]
     return sum(pair_distances) / len(pair_distances)

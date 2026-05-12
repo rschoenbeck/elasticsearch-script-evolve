@@ -79,6 +79,12 @@ def test_recall_none_retrieved_is_zero() -> None:
     assert recall_at_k(["x", "y"], {"a", "b"}, k=2) == 0.0
 
 
+def test_recall_empty_relevant_is_none() -> None:
+    # Recall is undefined without any positives. Callers must filter
+    # empty-ground-truth users upstream; the None return is a loud signal.
+    assert recall_at_k(["a", "b"], set(), k=2) is None
+
+
 def test_recall_half_retrieved() -> None:
     assert recall_at_k(["a", "x"], {"a", "b"}, k=2) == 0.5
 
@@ -146,6 +152,11 @@ def test_ild_mixed_handcomputed() -> None:
         {"sector": "Agriculture", "country": "PE"},
     ]
     assert ild_at_k(items, fields=("sector", "country"), k=3) == 2.5 / 3
+
+
+def test_ild_empty_fields_raises() -> None:
+    with pytest.raises(ValueError, match="at least one diversity field"):
+        ild_at_k([{"sector": "Agriculture"}, {"sector": "Retail"}], fields=(), k=2)
 
 
 def test_ild_k_one_is_none() -> None:
