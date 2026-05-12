@@ -21,26 +21,6 @@ USER_VECTOR_FIELDS: tuple[str, ...] = tuple(
 )
 ITEM_VECTOR_FIELD: str = "item_vector"
 
-# Field types for declared item attributes. Diversity fields (sector,
-# country, partnerId) must be keyword so equality comparisons in ILD —
-# and any future term-level filters — work without analyzer surprises.
-ATTRIBUTE_FIELD_TYPES: dict[str, dict[str, Any]] = {
-    "activity": {"type": "keyword"},
-    "amountLeft": {"type": "double"},
-    "borrowerCount": {"type": "integer"},
-    "country": {"type": "keyword"},
-    "distributionModel": {"type": "keyword"},
-    "fundraisingDate": {"type": "date", "format": "basic_date_time_no_millis"},
-    "gender": {"type": "keyword"},
-    "isMatchable": {"type": "boolean"},
-    "loanAmount": {"type": "double"},
-    "partnerId": {"type": "keyword"},
-    "popularityScore": {"type": "integer"},
-    "sector": {"type": "keyword"},
-    "tagsIds": {"type": "integer"},
-    "themesIds": {"type": "integer"},
-}
-
 
 def _dense_vector(dim: int) -> dict[str, Any]:
     return {

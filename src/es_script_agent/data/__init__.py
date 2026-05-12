@@ -8,7 +8,7 @@ directly.
 
 from __future__ import annotations
 
-from typing import Iterable, Protocol, runtime_checkable
+from typing import Any, Iterable, Protocol, runtime_checkable
 
 from es_script_agent.data.schema import Interaction, Item, User
 
@@ -29,12 +29,17 @@ class DatasetAdapter(Protocol):
         vector_dim: Common dimensionality of item and user vectors.
             Asserted equal across both at index time.
         required_attributes: Item-attribute keys the adapter promises
-            to populate; consumed by ``indices/schemas.py`` when
-            building the ES mapping.
+            to populate. Should equal ``attribute_field_types.keys()``.
+        attribute_field_types: ES field-type definitions keyed by
+            attribute name; consumed by ``indices/load.py`` when
+            building the loans index mapping. Keeping this on the
+            adapter (not in ``indices/``) preserves the boundary that
+            no Elasticsearch field names live outside ``data/adapters/``.
     """
 
     vector_dim: int
     required_attributes: list[str]
+    attribute_field_types: dict[str, dict[str, Any]]
 
     def iter_items(self) -> Iterable[Item]: ...
 

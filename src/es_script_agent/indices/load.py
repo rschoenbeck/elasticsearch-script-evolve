@@ -157,13 +157,15 @@ def setup_indices(
             f"vector dim mismatch: items={item_dim}, users={user_dim}"
         )
 
-    from es_script_agent.indices.schemas import ATTRIBUTE_FIELD_TYPES
-
-    _drop_and_create(es, LOANS_INDEX, loans_mapping(item_dim, ATTRIBUTE_FIELD_TYPES))
+    _drop_and_create(
+        es, LOANS_INDEX, loans_mapping(item_dim, adapter.attribute_field_types)
+    )
     _drop_and_create(es, USERS_INDEX, users_mapping(item_dim))
 
-    bulk(es, item_actions(items, LOANS_INDEX), chunk_size=chunk_size)
-    bulk(es, user_actions(users, USERS_INDEX), chunk_size=chunk_size)
+    # refresh="wait_for" so the count() below sees the just-loaded docs;
+    # without it, ES's 1s default refresh interval makes the CLI lie.
+    bulk(es, item_actions(items, LOANS_INDEX), chunk_size=chunk_size, refresh="wait_for")
+    bulk(es, user_actions(users, USERS_INDEX), chunk_size=chunk_size, refresh="wait_for")
 
     return {
         LOANS_INDEX: es.count(index=LOANS_INDEX)["count"],

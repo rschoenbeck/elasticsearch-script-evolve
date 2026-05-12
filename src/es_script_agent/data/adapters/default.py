@@ -17,22 +17,29 @@ from es_script_agent.data.schema import Interaction, Item, User
 
 logger = logging.getLogger(__name__)
 
-_REQUIRED_ATTRIBUTES: tuple[str, ...] = (
-    "activity",
-    "amountLeft",
-    "borrowerCount",
-    "country",
-    "distributionModel",
-    "fundraisingDate",
-    "gender",
-    "isMatchable",
-    "loanAmount",
-    "partnerId",
-    "popularityScore",
-    "sector",
-    "tagsIds",
-    "themesIds",
-)
+"""Single source of truth for the default dataset's loan attributes:
+the keys define what `iter_items` extracts and `required_attributes`
+exposes; the values define the ES field types that `setup_indices`
+uses to build the index mapping. Diversity fields (sector, country,
+partnerId) are keyword so equality comparisons in ILD — and any future
+term-level filters — work without analyzer surprises.
+"""
+_ATTRIBUTE_FIELD_TYPES: dict[str, dict[str, Any]] = {
+    "activity": {"type": "keyword"},
+    "amountLeft": {"type": "double"},
+    "borrowerCount": {"type": "integer"},
+    "country": {"type": "keyword"},
+    "distributionModel": {"type": "keyword"},
+    "fundraisingDate": {"type": "date", "format": "basic_date_time_no_millis"},
+    "gender": {"type": "keyword"},
+    "isMatchable": {"type": "boolean"},
+    "loanAmount": {"type": "double"},
+    "partnerId": {"type": "keyword"},
+    "popularityScore": {"type": "integer"},
+    "sector": {"type": "keyword"},
+    "tagsIds": {"type": "integer"},
+    "themesIds": {"type": "integer"},
+}
 
 # Use these keys to extract user and item vectors
 _VECTOR_VERSION_KEY = "vectorVersionB"
@@ -63,7 +70,8 @@ class DefaultAdapter:
     """
 
     vector_dim: int = 32
-    required_attributes: list[str] = list(_REQUIRED_ATTRIBUTES)
+    required_attributes: list[str] = list(_ATTRIBUTE_FIELD_TYPES)
+    attribute_field_types: dict[str, dict[str, Any]] = _ATTRIBUTE_FIELD_TYPES
 
     def __init__(
         self,
@@ -160,7 +168,7 @@ def _item_from_source(src: dict[str, Any]) -> Item | None:
     if vector is None:
         logger.debug("loan %r missing 'vectorVersionB.itemVector'; skipping", loan_id)
         return None
-    attributes = {key: src.get(key) for key in _REQUIRED_ATTRIBUTES}
+    attributes = {key: src.get(key) for key in _ATTRIBUTE_FIELD_TYPES}
     return Item(id=str(loan_id), vector=[float(x) for x in vector], attributes=attributes)
 
 

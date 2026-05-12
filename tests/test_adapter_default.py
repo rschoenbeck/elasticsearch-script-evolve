@@ -49,6 +49,24 @@ def test_required_attributes_declared(adapter: DefaultAdapter) -> None:
     assert set(adapter.required_attributes) == expected
 
 
+def test_attribute_field_types_match_required_attributes(
+    adapter: DefaultAdapter,
+) -> None:
+    # The two must agree: required_attributes is what iter_items extracts;
+    # attribute_field_types is what the index mapping declares for the same
+    # keys. Drift here means dynamic mappings would silently take over.
+    assert set(adapter.required_attributes) == set(adapter.attribute_field_types)
+
+
+def test_attribute_field_types_make_diversity_fields_keyword(
+    adapter: DefaultAdapter,
+) -> None:
+    # ILD computes equality across categorical fields — they must be keyword
+    # so _source returns them unanalyzed for the runner.
+    for diversity_field in ("sector", "country", "partnerId"):
+        assert adapter.attribute_field_types[diversity_field]["type"] == "keyword"
+
+
 def test_iter_items_golden(adapter: DefaultAdapter) -> None:
     items = list(adapter.iter_items())
     assert len(items) == 3

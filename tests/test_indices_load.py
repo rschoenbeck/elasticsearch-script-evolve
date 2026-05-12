@@ -112,6 +112,10 @@ class FakeES:
 class DummyAdapter:
     vector_dim = 4
     required_attributes = ["sector", "country"]
+    attribute_field_types: dict[str, dict[str, Any]] = {
+        "sector": {"type": "keyword"},
+        "country": {"type": "keyword"},
+    }
 
     def __init__(
         self,
@@ -137,12 +141,12 @@ def test_setup_indices_drops_creates_and_loads(monkeypatch: pytest.MonkeyPatch) 
     adapter = DummyAdapter(items, users)
     es = FakeES(doc_counts={LOANS_INDEX: 3, USERS_INDEX: 2})
 
-    bulk_invocations: list[tuple[str, list[dict[str, Any]]]] = []
+    bulk_invocations: list[tuple[str, list[dict[str, Any]], dict[str, Any]]] = []
 
     def fake_bulk(client: Any, actions: Any, **kwargs: Any) -> tuple[int, list]:
         materialized = list(actions)
         index_name = materialized[0]["_index"] if materialized else "<empty>"
-        bulk_invocations.append((index_name, materialized))
+        bulk_invocations.append((index_name, materialized, kwargs))
         return (len(materialized), [])
 
     monkeypatch.setattr("es_script_agent.indices.load.bulk", fake_bulk)
@@ -152,9 +156,13 @@ def test_setup_indices_drops_creates_and_loads(monkeypatch: pytest.MonkeyPatch) 
     assert counts == {LOANS_INDEX: 3, USERS_INDEX: 2}
     assert es.indices.created[0][0] == LOANS_INDEX
     assert es.indices.created[1][0] == USERS_INDEX
-    assert [name for name, _ in bulk_invocations] == [LOANS_INDEX, USERS_INDEX]
+    assert [name for name, _, _ in bulk_invocations] == [LOANS_INDEX, USERS_INDEX]
     assert len(bulk_invocations[0][1]) == 3
     assert len(bulk_invocations[1][1]) == 2
+    # Both bulk calls must wait for refresh so the count() that follows
+    # in setup_indices sees the just-loaded docs (not stale 0s).
+    for _, _, kwargs in bulk_invocations:
+        assert kwargs.get("refresh") == "wait_for"
 
 
 def test_setup_indices_drops_existing_indices(
@@ -173,6 +181,35 @@ def test_setup_indices_drops_existing_indices(
 
     setup_indices(es, adapter)
     assert es.indices.deleted == [LOANS_INDEX, USERS_INDEX]
+
+
+def test_setup_indices_uses_adapter_attribute_field_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The adapter owns dataset-specific field names and types; setup_indices
+    # must build the loans mapping from adapter.attribute_field_types, not
+    # from any constant living next to the index code.
+    adapter = DummyAdapter(
+        items=[_item("L1", [0.0] * 4, sector="X", country="Y")],
+        users=[_user("U1", [[0.0] * 4] * 10)],
+    )
+    adapter.attribute_field_types = {
+        "sector": {"type": "keyword"},
+        "country": {"type": "keyword"},
+        "amount": {"type": "double"},
+    }
+    es = FakeES()
+    monkeypatch.setattr(
+        "es_script_agent.indices.load.bulk", lambda c, a, **kw: (len(list(a)), [])
+    )
+
+    setup_indices(es, adapter)
+
+    loans_create_body = es.indices.created[0][1]
+    props = loans_create_body["mappings"]["properties"]
+    assert props["sector"] == {"type": "keyword"}
+    assert props["country"] == {"type": "keyword"}
+    assert props["amount"] == {"type": "double"}
 
 
 def test_setup_indices_rejects_user_vector_dim_mismatch(
