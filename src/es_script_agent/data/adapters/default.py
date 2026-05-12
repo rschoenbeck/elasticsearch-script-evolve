@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -14,20 +15,31 @@ from es_script_agent.config import (
 )
 from es_script_agent.data.schema import Interaction, Item, User
 
-_REQUIRED_ATTRIBUTES: tuple[str, ...] = (
-    "sector",
-    "country",
-    "loanAmount",
-    "partnerId",
-    "activityId",
-    "themesIds",
-    "gender",
-    "borrowerCount",
-    "fundraisingDate",
-    "partnerRiskRating",
-    "researchScore",
-    "popularityScore",
-)
+logger = logging.getLogger(__name__)
+
+"""Single source of truth for the default dataset's loan attributes:
+the keys define what `iter_items` extracts and `required_attributes`
+exposes; the values define the ES field types that `setup_indices`
+uses to build the index mapping. Diversity fields (sector, country,
+partnerId) are keyword so equality comparisons in ILD — and any future
+term-level filters — work without analyzer surprises.
+"""
+_ATTRIBUTE_FIELD_TYPES: dict[str, dict[str, Any]] = {
+    "activity": {"type": "keyword"},
+    "amountLeft": {"type": "double"},
+    "borrowerCount": {"type": "integer"},
+    "country": {"type": "keyword"},
+    "distributionModel": {"type": "keyword"},
+    "fundraisingDate": {"type": "date", "format": "basic_date_time_no_millis"},
+    "gender": {"type": "keyword"},
+    "isMatchable": {"type": "boolean"},
+    "loanAmount": {"type": "double"},
+    "partnerId": {"type": "keyword"},
+    "popularityScore": {"type": "integer"},
+    "sector": {"type": "keyword"},
+    "tagsIds": {"type": "integer"},
+    "themesIds": {"type": "integer"},
+}
 
 # Use these keys to extract user and item vectors
 _VECTOR_VERSION_KEY = "vectorVersionB"
@@ -58,7 +70,8 @@ class DefaultAdapter:
     """
 
     vector_dim: int = 32
-    required_attributes: list[str] = list(_REQUIRED_ATTRIBUTES)
+    required_attributes: list[str] = list(_ATTRIBUTE_FIELD_TYPES)
+    attribute_field_types: dict[str, dict[str, Any]] = _ATTRIBUTE_FIELD_TYPES
 
     def __init__(
         self,
@@ -73,12 +86,35 @@ class DefaultAdapter:
         )
 
     def iter_items(self) -> Iterator[Item]:
+        skipped = 0
         for src in _iter_jsonl_sources(self.loans_path):
-            yield _item_from_source(src)
+            item = _item_from_source(src)
+            if item is None:
+                skipped += 1
+                continue
+            yield item
+        if skipped:
+            logger.warning(
+                "%s: skipped %d loan record(s) missing 'vectorVersionB.itemVector'",
+                self.loans_path.name,
+                skipped,
+            )
 
     def iter_users(self) -> Iterator[User]:
+        skipped = 0
         for src in _iter_jsonl_sources(self.users_path):
-            yield _user_from_source(src)
+            user = _user_from_source(src)
+            if user is None:
+                skipped += 1
+                continue
+            yield user
+        if skipped:
+            logger.warning(
+                "%s: skipped %d user record(s) missing one or more "
+                "'vectorVersionB.vectorN' slots",
+                self.users_path.name,
+                skipped,
+            )
 
     def iter_interactions(self) -> Iterator[Interaction]:
         with self.interactions_path.open(newline="") as f:
@@ -111,19 +147,42 @@ def _iter_jsonl_sources(path: Path) -> Iterator[dict[str, Any]]:
             yield src
 
 
-def _item_from_source(src: dict[str, Any]) -> Item:
+def _item_from_source(src: dict[str, Any]) -> Item | None:
+    """Normalize one loan source record, or return ``None`` to skip it.
+
+    Returns:
+        An ``Item`` on success. ``None`` if the record has no
+        ``vectorVersionB.itemVector`` — such items can't be cosine-scored,
+        so they're dropped from the load with a caller-side warning.
+
+    Raises:
+        ValueError: If ``loanId`` is missing. The id is structural; a
+            record without one indicates a malformed dump, not a noisy
+            row to silently drop.
+    """
     loan_id = src.get("loanId")
     if loan_id is None:
         raise ValueError("loan record missing required field 'loanId'")
     vector_block = src.get(_VECTOR_VERSION_KEY) or {}
     vector = vector_block.get(_ITEM_VECTOR_KEY)
     if vector is None:
-        raise ValueError(f"loan {loan_id!r} missing required 'vectorVersionB.itemVector'")
-    attributes = {key: src.get(key) for key in _REQUIRED_ATTRIBUTES}
+        logger.debug("loan %r missing 'vectorVersionB.itemVector'; skipping", loan_id)
+        return None
+    attributes = {key: src.get(key) for key in _ATTRIBUTE_FIELD_TYPES}
     return Item(id=str(loan_id), vector=[float(x) for x in vector], attributes=attributes)
 
 
-def _user_from_source(src: dict[str, Any]) -> User:
+def _user_from_source(src: dict[str, Any]) -> User | None:
+    """Normalize one user source record, or return ``None`` to skip it.
+
+    Returns:
+        A ``User`` on success. ``None`` if any of the 10 vector slots
+        is missing — such users can't participate in the multi-vector
+        scoring path, so they're dropped with a caller-side warning.
+
+    Raises:
+        ValueError: If ``userId`` is missing.
+    """
     user_id = src.get("userId")
     if user_id is None:
         raise ValueError("user record missing required field 'userId'")
@@ -132,6 +191,7 @@ def _user_from_source(src: dict[str, Any]) -> User:
     for key in _USER_VECTOR_KEYS:
         v = vector_block.get(key)
         if v is None:
-            raise ValueError(f"user {user_id!r} missing required 'vectorVersionB.{key}'")
+            logger.debug("user %r missing 'vectorVersionB.%s'; skipping", user_id, key)
+            return None
         vectors.append([float(x) for x in v])
     return User(id=str(user_id), vector=vectors, attributes={})
