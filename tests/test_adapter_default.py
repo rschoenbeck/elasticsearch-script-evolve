@@ -31,18 +31,20 @@ def test_vector_dim_is_32(adapter: DefaultAdapter) -> None:
 
 def test_required_attributes_declared(adapter: DefaultAdapter) -> None:
     expected = {
-        "sector",
+        "activity",
+        "amountLeft",
+        "borrowerCount",
         "country",
+        "distributionModel",
+        "fundraisingDate",
+        "gender",
+        "isMatchable",
         "loanAmount",
         "partnerId",
-        "activityId",
-        "themesIds",
-        "gender",
-        "borrowerCount",
-        "fundraisingDate",
-        "partnerRiskRating",
-        "researchScore",
         "popularityScore",
+        "sector",
+        "tagsIds",
+        "themesIds",
     }
     assert set(adapter.required_attributes) == expected
 
@@ -55,18 +57,20 @@ def test_iter_items_golden(adapter: DefaultAdapter) -> None:
         id="L1",
         vector=_vec(0),
         attributes={
-            "sector": "Agriculture",
+            "activity": "Farming",
+            "amountLeft": 200.0,
+            "borrowerCount": 1,
             "country": "Kenya",
+            "distributionModel": "field_partner",
+            "fundraisingDate": "20260101T000000Z",
+            "gender": "FEMALE",
+            "isMatchable": True,
             "loanAmount": 500,
             "partnerId": 42,
-            "activityId": 31,
-            "themesIds": [1, 2],
-            "gender": "FEMALE",
-            "borrowerCount": 1,
-            "fundraisingDate": "20260101T000000Z",
-            "partnerRiskRating": 1.5,
-            "researchScore": 10.0,
             "popularityScore": 3,
+            "sector": "Agriculture",
+            "tagsIds": [11, 12],
+            "themesIds": [1, 2],
         },
     )
 

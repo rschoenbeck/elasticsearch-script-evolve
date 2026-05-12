@@ -18,18 +18,20 @@ from es_script_agent.data.schema import Interaction, Item, User
 logger = logging.getLogger(__name__)
 
 _REQUIRED_ATTRIBUTES: tuple[str, ...] = (
-    "sector",
+    "activity",
+    "amountLeft",
+    "borrowerCount",
     "country",
+    "distributionModel",
+    "fundraisingDate",
+    "gender",
+    "isMatchable",
     "loanAmount",
     "partnerId",
-    "activityId",
-    "themesIds",
-    "gender",
-    "borrowerCount",
-    "fundraisingDate",
-    "partnerRiskRating",
-    "researchScore",
     "popularityScore",
+    "sector",
+    "tagsIds",
+    "themesIds",
 )
 
 # Use these keys to extract user and item vectors

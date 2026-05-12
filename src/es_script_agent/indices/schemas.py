@@ -25,18 +25,20 @@ ITEM_VECTOR_FIELD: str = "item_vector"
 # country, partnerId) must be keyword so equality comparisons in ILD —
 # and any future term-level filters — work without analyzer surprises.
 ATTRIBUTE_FIELD_TYPES: dict[str, dict[str, Any]] = {
-    "sector": {"type": "keyword"},
+    "activity": {"type": "keyword"},
+    "amountLeft": {"type": "double"},
+    "borrowerCount": {"type": "integer"},
     "country": {"type": "keyword"},
+    "distributionModel": {"type": "keyword"},
+    "fundraisingDate": {"type": "date", "format": "basic_date_time_no_millis"},
+    "gender": {"type": "keyword"},
+    "isMatchable": {"type": "boolean"},
     "loanAmount": {"type": "double"},
     "partnerId": {"type": "keyword"},
-    "activityId": {"type": "keyword"},
-    "themesIds": {"type": "keyword"},
-    "gender": {"type": "keyword"},
-    "borrowerCount": {"type": "integer"},
-    "fundraisingDate": {"type": "keyword"},
-    "partnerRiskRating": {"type": "double"},
-    "researchScore": {"type": "double"},
     "popularityScore": {"type": "integer"},
+    "sector": {"type": "keyword"},
+    "tagsIds": {"type": "integer"},
+    "themesIds": {"type": "integer"},
 }
 
 
