@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import itertools
 import logging
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable, Iterator, TypeVar
 
 from elasticsearch.helpers import bulk
 
@@ -98,22 +98,16 @@ def _drop_and_create(es: Any, index_name: str, body: dict[str, Any]) -> None:
     logger.info("created index %s", index_name)
 
 
-def _peek_first_item(adapter: DatasetAdapter) -> tuple[Item, Iterator[Item]]:
-    """Pull the first item, returning it and a re-chained iterator."""
-    iterator = iter(adapter.iter_items())
+_T = TypeVar("_T")
+
+
+def _peek_first(source: Iterable[_T], *, kind: str) -> tuple[_T, Iterator[_T]]:
+    """Pull the first element, returning it and a re-chained iterator."""
+    iterator = iter(source)
     try:
         first = next(iterator)
     except StopIteration:
-        raise ValueError("adapter yielded no items; cannot infer vector dim from empty data")
-    return first, itertools.chain([first], iterator)
-
-
-def _peek_first_user(adapter: DatasetAdapter) -> tuple[User, Iterator[User]]:
-    iterator = iter(adapter.iter_users())
-    try:
-        first = next(iterator)
-    except StopIteration:
-        raise ValueError("adapter yielded no users; cannot infer vector dim from empty data")
+        raise ValueError(f"adapter yielded no {kind}; cannot infer vector dim from empty data")
     return first, itertools.chain([first], iterator)
 
 
@@ -140,12 +134,12 @@ def setup_indices(
     Raises:
         ValueError: If the adapter is empty or item/user dims disagree.
     """
-    first_item, items = _peek_first_item(adapter)
+    first_item, items = _peek_first(adapter.iter_items(), kind="items")
     if first_item.vector is None:
         raise ValueError(f"first item {first_item.id!r} has no vector; cannot infer dim")
     item_dim = len(first_item.vector)
 
-    first_user, users = _peek_first_user(adapter)
+    first_user, users = _peek_first(adapter.iter_users(), kind="users")
     if len(first_user.vector) != NUM_USER_VECTORS:
         raise ValueError(
             f"first user {first_user.id!r} has {len(first_user.vector)} vectors; "
@@ -153,13 +147,9 @@ def setup_indices(
         )
     user_dim = len(first_user.vector[0])
     if user_dim != item_dim:
-        raise ValueError(
-            f"vector dim mismatch: items={item_dim}, users={user_dim}"
-        )
+        raise ValueError(f"vector dim mismatch: items={item_dim}, users={user_dim}")
 
-    _drop_and_create(
-        es, LOANS_INDEX, loans_mapping(item_dim, adapter.attribute_field_types)
-    )
+    _drop_and_create(es, LOANS_INDEX, loans_mapping(item_dim, adapter.attribute_field_types))
     _drop_and_create(es, USERS_INDEX, users_mapping(item_dim))
 
     # refresh="wait_for" so the count() below sees the just-loaded docs;
