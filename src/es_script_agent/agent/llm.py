@@ -16,9 +16,7 @@ from langchain_openai import ChatOpenAI
 from es_script_agent import config
 
 _ANTHROPIC_MODEL = "claude-sonnet-4-6"
-# gpt-5.5 has no public model id at time of writing; gpt-4o is the safe
-# current equivalent for code-only structured output.
-_OPENAI_MODEL = "gpt-4o"
+_OPENAI_MODEL = "gpt-5.5"
 
 _SUPPORTED_PROVIDERS = ("anthropic", "openai")
 
