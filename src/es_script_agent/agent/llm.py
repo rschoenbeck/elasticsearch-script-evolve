@@ -15,18 +15,17 @@ from langchain_openai import ChatOpenAI
 
 from es_script_agent import config
 
-_ANTHROPIC_MODEL = "claude-sonnet-4-6"
-_OPENAI_MODEL = "gpt-5.5"
-
 _SUPPORTED_PROVIDERS = ("anthropic", "openai")
 
 
-def make_llm(provider: str | None = None) -> BaseChatModel:
+def make_llm(provider: str | None = None, model: str | None = None) -> BaseChatModel:
     """Build a LangChain chat model for the requested provider.
 
     Args:
         provider: Provider name, one of ``"anthropic"`` or ``"openai"``.
             Defaults to :data:`config.LLM_PROVIDER` when ``None``.
+        model: Model id override. Defaults to :data:`config.ANTHROPIC_MODEL`
+            or :data:`config.OPENAI_MODEL` depending on ``provider``.
 
     Returns:
         A configured :class:`BaseChatModel`. The concrete class is
@@ -41,11 +40,17 @@ def make_llm(provider: str | None = None) -> BaseChatModel:
     if name == "anthropic":
         if not config.ANTHROPIC_API_KEY:
             raise ValueError("ANTHROPIC_API_KEY is not set in the environment")
-        return ChatAnthropic(model=_ANTHROPIC_MODEL, api_key=config.ANTHROPIC_API_KEY)
+        return ChatAnthropic(
+            model=model or config.ANTHROPIC_MODEL,
+            api_key=config.ANTHROPIC_API_KEY,
+        )
     if name == "openai":
         if not config.OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY is not set in the environment")
-        return ChatOpenAI(model=_OPENAI_MODEL, api_key=config.OPENAI_API_KEY)
+        return ChatOpenAI(
+            model=model or config.OPENAI_MODEL,
+            api_key=config.OPENAI_API_KEY,
+        )
     raise ValueError(
         f"unknown LLM provider {provider!r}; supported: {_SUPPORTED_PROVIDERS}"
     )

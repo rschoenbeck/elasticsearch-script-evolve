@@ -44,3 +44,24 @@ def test_make_llm_defaults_to_config_provider(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "test-anthropic-key")
     llm = make_llm()
     assert isinstance(llm, ChatAnthropic)
+
+
+def test_make_llm_anthropic_uses_config_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.setattr(config, "ANTHROPIC_MODEL", "claude-from-config")
+    llm = make_llm("anthropic")
+    assert llm.model == "claude-from-config"
+
+
+def test_make_llm_openai_uses_config_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setattr(config, "OPENAI_MODEL", "gpt-from-config")
+    llm = make_llm("openai")
+    assert llm.model_name == "gpt-from-config"
+
+
+def test_make_llm_model_param_overrides_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.setattr(config, "ANTHROPIC_MODEL", "claude-from-config")
+    llm = make_llm("anthropic", model="claude-from-arg")
+    assert llm.model == "claude-from-arg"

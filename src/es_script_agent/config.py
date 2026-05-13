@@ -31,6 +31,8 @@ ES_URL: str = os.getenv("ES_URL", "http://localhost:9200")
 LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openai")
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.5")
 
 DATA_DIR: Path = _REPO_ROOT / "data"
 RUNS_DIR: Path = _REPO_ROOT / "runs"
