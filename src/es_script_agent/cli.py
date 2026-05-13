@@ -10,7 +10,7 @@ from importlib.metadata import version as pkg_version
 from es_script_agent import config
 from es_script_agent.data import load_dataset
 from es_script_agent.es.client import make_client
-from es_script_agent.es.load import fetch_indexed_item_ids, setup_indices
+from es_script_agent.es.index import fetch_indexed_item_ids, setup_indices
 from es_script_agent.es.query import MAX_SORT_SCRIPTS
 from es_script_agent.es.schemas import LOANS_INDEX
 from es_script_agent.eval.interactions import build_ground_truth, filter_to_indexed_items
