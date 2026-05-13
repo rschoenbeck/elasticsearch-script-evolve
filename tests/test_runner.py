@@ -81,11 +81,11 @@ def test_script_set_rejects_blank_query_source() -> None:
         ScriptSet(query_source="   ")
 
 
-def test_script_set_enforces_max_sort_scripts() -> None:
-    from es_script_agent.es.query import MAX_SORT_SCRIPTS
-
-    with pytest.raises(ValueError, match="too many sort scripts"):
-        ScriptSet(query_source="Q", sort_sources=["S"] * (MAX_SORT_SCRIPTS + 1))
+def test_script_set_carries_arbitrary_sort_source_count() -> None:
+    """ScriptSet is a pure value type; sort-script cap enforcement is policy
+    and lives at the agent tool layer, not on this model."""
+    s = ScriptSet(query_source="Q", sort_sources=["S"] * 12)
+    assert len(s.sort_sources) == 12
 
 
 def test_load_script_set_reads_query_only(tmp_path: Path) -> None:

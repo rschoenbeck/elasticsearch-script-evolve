@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from es_script_agent import config
 from es_script_agent.data.schema import User
 from es_script_agent.es.client import format_es_error
-from es_script_agent.es.query import MAX_SORT_SCRIPTS, build_query
+from es_script_agent.es.query import build_query
 from es_script_agent.es.schemas import LOANS_INDEX
 from es_script_agent.eval.metrics import (
     aggregate,
@@ -39,11 +39,14 @@ logger = logging.getLogger(__name__)
 class ScriptSet(BaseModel):
     """The agent-authored Painless surface for one iteration.
 
+    Pure value type — carries the Painless bodies and their order, no
+    policy. The sort-script cap is enforced at the call-site that knows
+    the per-run cap (the agent tool layer), not here.
+
     Attributes:
         query_source: Single ``script_score`` body. Non-blank.
         sort_sources: Zero or more sort-script bodies, executed in list
-            order before the ``_score desc`` tie-break. Bounded by
-            :data:`~es_script_agent.es.query.MAX_SORT_SCRIPTS`.
+            order before the ``_score desc`` tie-break.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -56,15 +59,6 @@ class ScriptSet(BaseModel):
     def _non_blank(cls, v: str) -> str:
         if not v or not v.strip():
             raise ValueError("query_source must be a non-empty Painless source string")
-        return v
-
-    @field_validator("sort_sources")
-    @classmethod
-    def _bounded(cls, v: list[str]) -> list[str]:
-        if len(v) > MAX_SORT_SCRIPTS:
-            raise ValueError(
-                f"too many sort scripts: {len(v)} > MAX_SORT_SCRIPTS={MAX_SORT_SCRIPTS}"
-            )
         return v
 
 
