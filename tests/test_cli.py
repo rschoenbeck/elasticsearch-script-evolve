@@ -11,7 +11,7 @@ def test_package_imports() -> None:
 
 @pytest.mark.parametrize(
     "func_name",
-    ["rl_loop_cmd", "eval_cmd"],
+    ["rl_loop_cmd"],
 )
 def test_cli_stub_raises_not_implemented(func_name: str) -> None:
     cli = importlib.import_module("es_script_agent.cli")

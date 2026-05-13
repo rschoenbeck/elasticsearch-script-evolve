@@ -6,6 +6,7 @@ import argparse
 import logging
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version
+from pathlib import Path
 
 from es_script_agent import config
 from es_script_agent.data import load_dataset
@@ -14,7 +15,7 @@ from es_script_agent.es.index import fetch_indexed_item_ids, setup_indices
 from es_script_agent.es.query import MAX_SORT_SCRIPTS
 from es_script_agent.es.schemas import LOANS_INDEX
 from es_script_agent.eval.interactions import build_ground_truth, filter_to_indexed_items
-from es_script_agent.eval.runner import evaluate, load_script_set
+from es_script_agent.eval.runner import ScriptSet, evaluate, load_script_set
 from es_script_agent.runlog import IterationRecord, RunLog, new_run_dir, snapshot_script_set
 
 logger = logging.getLogger(__name__)
@@ -149,5 +150,125 @@ def rl_loop_cmd() -> None:
     raise NotImplementedError("rl-loop is not implemented yet (Task 16)")
 
 
+def build_eval_parser() -> argparse.ArgumentParser:
+    """Build the argparse parser for ``uv run eval``.
+
+    The parser exposes two mutually exclusive ways to point at a script
+    set: ``--set <dir>`` (loads via :func:`load_script_set`) or
+    ``--query <path>`` plus zero-or-more ``--sort <path>`` files. The
+    parser enforces mutual exclusion between ``--set`` and ``--query``
+    via an argparse group; the ``--sort``/``--set`` and
+    ``--sort``-without-``--query`` cases are caught by
+    :func:`_validate_eval_args` because ``--sort`` lives outside the
+    group (argparse cannot express "sort follows query" natively).
+
+    Returns:
+        A configured :class:`argparse.ArgumentParser`.
+    """
+    parser = argparse.ArgumentParser(prog="eval")
+    parser.add_argument("--dataset", default="default")
+    parser.add_argument("--k", type=_positive_int, default=10)
+
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--set",
+        dest="set_dir",
+        help="Directory containing query.painless + sort_NN.painless.",
+    )
+    group.add_argument("--query", help="Path to a single query.painless source file.")
+
+    parser.add_argument(
+        "--sort",
+        action="append",
+        default=[],
+        help="Sort script path; repeat for multiple. Only valid with --query.",
+    )
+    return parser
+
+
+def _validate_eval_args(args: argparse.Namespace) -> None:
+    """Reject ``--sort`` combined with ``--set`` or used without ``--query``."""
+    if args.sort and args.set_dir is not None:
+        raise SystemExit("error: --sort cannot be combined with --set")
+    if args.sort and args.query is None:
+        raise SystemExit("error: --sort requires --query")
+
+
+def _load_script_set_from_args(args: argparse.Namespace) -> tuple[ScriptSet, Path, list[Path]]:
+    """Resolve CLI args into a ``ScriptSet`` plus the paths it was read from.
+
+    Returns:
+        ``(script_set, query_path, sort_paths)`` where the paths are the
+        files actually read (the query file inside ``--set`` for the
+        dir-based form, or the explicit ``--query``/``--sort`` paths).
+    """
+    if args.set_dir is not None:
+        set_dir = Path(args.set_dir)
+        script_set = load_script_set(set_dir)
+        sort_paths = sorted(set_dir.glob("sort_*.painless"))
+        return script_set, set_dir / "query.painless", sort_paths
+
+    query_path = Path(args.query)
+    sort_paths = [Path(p) for p in args.sort]
+    script_set = ScriptSet(
+        query_source=query_path.read_text(),
+        sort_sources=[p.read_text() for p in sort_paths],
+    )
+    return script_set, query_path, sort_paths
+
+
 def eval_cmd() -> None:
-    raise NotImplementedError("eval is not implemented yet (Task 13)")
+    """Re-evaluate a saved script set against the current indices.
+
+    One-shot inspection: prints metrics + timing + the resolved paths.
+    Does **not** create a run directory or append to any run log.
+    Exits non-zero if the script set fails to load or every user fails
+    during evaluation.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    parser = build_eval_parser()
+    args = parser.parse_args()
+    _validate_eval_args(args)
+
+    script_set, query_path, sort_paths = _load_script_set_from_args(args)
+
+    adapter = load_dataset(args.dataset)
+    es = make_client()
+
+    raw_ground_truth = build_ground_truth(adapter.iter_interactions())
+    indexed_ids = fetch_indexed_item_ids(es, index=LOANS_INDEX)
+    ground_truth, stats = filter_to_indexed_items(raw_ground_truth, indexed_ids)
+    logger.info(
+        "ground-truth filter: kept %d/%d users, %d/%d positives (%.1f%% dropped)",
+        stats.users_after,
+        stats.users_before,
+        stats.positives_after,
+        stats.positives_before,
+        stats.positives_dropped_pct,
+    )
+    users_by_id = {u.id: u for u in adapter.iter_users() if u.id in ground_truth}
+
+    try:
+        result = evaluate(
+            es,
+            script_set,
+            ground_truth,
+            users_by_id,
+            k=args.k,
+            diversity_fields=config.ILD_DIVERSITY_FIELDS,
+        )
+    except RuntimeError as exc:
+        raise SystemExit(f"error: {exc}") from exc
+
+    if args.set_dir is not None:
+        print(f"set: {args.set_dir}")
+    print(f"query: {query_path}")
+    for path in sort_paths:
+        print(f"sort: {path}")
+    print(f"eval_users: {result.eval_users}")
+    print(f"eval_seconds: {result.eval_seconds:.2f}")
+    for key, value in sorted(result.metrics.items()):
+        print(f"{key}: {value!r}" if value is None else f"{key}: {value:.4f}")
+    if result.partial_failure and result.sample_error is not None:
+        print(f"sample_error: {result.sample_error}")
