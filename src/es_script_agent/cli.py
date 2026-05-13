@@ -87,6 +87,7 @@ def baseline_cmd() -> None:
     script_set = load_script_set(config.SCRIPTS_DIR / "baseline")
     run_dir = new_run_dir(config.RUNS_DIR)
     query_path, sort_paths = snapshot_script_set(run_dir, 0, script_set)
+    started_at = _utc_now_iso()
 
     result = evaluate(
         es,
@@ -107,7 +108,7 @@ def baseline_cmd() -> None:
             "seed": 0,
             "max_sort_scripts": MAX_SORT_SCRIPTS,
             "harness_version": pkg_version("elasticsearch-agentic-script-sorting"),
-            "created_at": _utc_now_iso(),
+            "created_at": started_at,
             "ild_diversity_fields": list(config.ILD_DIVERSITY_FIELDS),
             "objective": args.objective,
             "baseline_metrics": result.metrics,
@@ -123,7 +124,7 @@ def baseline_cmd() -> None:
     log.append(
         IterationRecord(
             iter=0,
-            timestamp=_utc_now_iso(),
+            timestamp=started_at,
             query_script_path=str(query_path),
             sort_script_paths=[str(p) for p in sort_paths],
             metrics=result.metrics,
