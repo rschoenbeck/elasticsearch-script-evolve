@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from es_script_agent.eval.query import MAX_SORT_SCRIPTS, build_query
+from es_script_agent.es.query import MAX_SORT_SCRIPTS, build_query
 
 
 FIXTURES = Path(__file__).parent / "fixtures"

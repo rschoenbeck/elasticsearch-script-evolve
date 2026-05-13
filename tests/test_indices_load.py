@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from es_script_agent.data.schema import Item, User
-from es_script_agent.indices.load import (
+from es_script_agent.es.load import (
     LOANS_INDEX,
     USERS_INDEX,
     item_actions,
@@ -149,7 +149,7 @@ def test_setup_indices_drops_creates_and_loads(monkeypatch: pytest.MonkeyPatch) 
         bulk_invocations.append((index_name, materialized, kwargs))
         return (len(materialized), [])
 
-    monkeypatch.setattr("es_script_agent.indices.load.bulk", fake_bulk)
+    monkeypatch.setattr("es_script_agent.es.load.bulk", fake_bulk)
 
     counts = setup_indices(es, adapter)
 
@@ -176,7 +176,7 @@ def test_setup_indices_drops_existing_indices(
     es.indices._exists = {LOANS_INDEX, USERS_INDEX}
 
     monkeypatch.setattr(
-        "es_script_agent.indices.load.bulk", lambda c, a, **kw: (len(list(a)), [])
+        "es_script_agent.es.load.bulk", lambda c, a, **kw: (len(list(a)), [])
     )
 
     setup_indices(es, adapter)
@@ -200,7 +200,7 @@ def test_setup_indices_uses_adapter_attribute_field_types(
     }
     es = FakeES()
     monkeypatch.setattr(
-        "es_script_agent.indices.load.bulk", lambda c, a, **kw: (len(list(a)), [])
+        "es_script_agent.es.load.bulk", lambda c, a, **kw: (len(list(a)), [])
     )
 
     setup_indices(es, adapter)
@@ -222,7 +222,7 @@ def test_setup_indices_rejects_user_vector_dim_mismatch(
     )
     es = FakeES()
     monkeypatch.setattr(
-        "es_script_agent.indices.load.bulk", lambda c, a, **kw: (len(list(a)), [])
+        "es_script_agent.es.load.bulk", lambda c, a, **kw: (len(list(a)), [])
     )
 
     with pytest.raises(ValueError, match="dim"):
@@ -235,7 +235,7 @@ def test_setup_indices_rejects_empty_adapter(
     adapter = DummyAdapter(items=[], users=[])
     es = FakeES()
     monkeypatch.setattr(
-        "es_script_agent.indices.load.bulk", lambda c, a, **kw: (0, [])
+        "es_script_agent.es.load.bulk", lambda c, a, **kw: (0, [])
     )
 
     with pytest.raises(ValueError, match="empty"):
