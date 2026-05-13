@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,7 @@ from es_script_agent.data.schema import User
 from es_script_agent.es.client import format_es_error
 from es_script_agent.es.query import MAX_SORT_SCRIPTS, build_query
 from es_script_agent.es.schemas import LOANS_INDEX
-from es_script_agent.eval.runner import ScriptSet, evaluate
+from es_script_agent.eval.runner import EvalResult, ScriptSet, evaluate
 from es_script_agent.runlog import (
     IterationRecord,
     RunLog,
@@ -43,6 +44,10 @@ from es_script_agent.runlog import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Sum type: success carries the full EvalResult; failure carries a
+# stringified error message destined for IterationRecord.compile_error.
+EvalResultOrError = EvalResult | str
 
 
 @dataclass
@@ -103,17 +108,14 @@ class ToolContext:
 
 
 def _utc_now_iso() -> str:
-    from datetime import datetime, timezone
-
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _primary_key(objective: str, k: int) -> str:
-    return f"{objective}@{k}"
-
-
-def _guardrail_key(objective: str, k: int) -> str:
-    return f"{'ild' if objective == 'ndcg' else 'ndcg'}@{k}"
+def _metric_keys(objective: str, k: int) -> tuple[str, str]:
+    """Return ``(primary, guardrail)`` metric keys for the run's objective."""
+    if objective == "ndcg":
+        return f"ndcg@{k}", f"ild@{k}"
+    return f"ild@{k}", f"ndcg@{k}"
 
 
 def _compile_check(ctx: ToolContext, script_set: ScriptSet) -> str | None:
@@ -143,8 +145,56 @@ def _compile_check(ctx: ToolContext, script_set: ScriptSet) -> str | None:
     return None
 
 
-def _default_parent_iter(ctx: ToolContext) -> int | None:
-    return ctx.last_success_iter
+def _compile_then_evaluate(ctx: ToolContext, script_set: ScriptSet) -> EvalResultOrError:
+    """Compile-check, then evaluate, collapsing both failure modes.
+
+    Returns the :class:`EvalResult` on success, or a stringified error
+    message when the compile-check fails or the full eval raises (e.g.
+    ``"all users failed"``). Both failures are recorded with the same
+    JSONL shape (``metrics: None`` + ``compile_error`` populated), so
+    the caller only needs to branch on type.
+    """
+    compile_error = _compile_check(ctx, script_set)
+    if compile_error is not None:
+        return compile_error
+    try:
+        return evaluate(
+            ctx.es,
+            script_set,
+            ctx.ground_truth,
+            ctx.users_by_id,
+            k=ctx.k,
+            diversity_fields=ctx.diversity_fields,
+            index=ctx.index,
+        )
+    except RuntimeError as exc:
+        return str(exc)
+
+
+def _make_failure_record(
+    *,
+    iter_n: int,
+    timestamp: str,
+    query_path: str,
+    sort_paths: list[str],
+    rationale: str,
+    parent: int | None,
+    error_msg: str,
+) -> IterationRecord:
+    return IterationRecord(
+        iter=iter_n,
+        timestamp=timestamp,
+        query_script_path=query_path,
+        sort_script_paths=sort_paths,
+        metrics=None,
+        eval_users=0,
+        eval_seconds=0.0,
+        llm_rationale=rationale,
+        parent_iter=parent,
+        compile_error=error_msg,
+        partial_failure=False,
+        sample_error=None,
+    )
 
 
 def _eval_scripts_impl(
@@ -178,68 +228,38 @@ def _eval_scripts_impl(
     iter_n = ctx.iter_counter
     ctx.iter_counter += 1
     timestamp = _utc_now_iso()
-    parent = parent_iter if parent_iter is not None else _default_parent_iter(ctx)
+    parent = parent_iter if parent_iter is not None else ctx.last_success_iter
 
-    query_path, sort_paths = snapshot_script_set(ctx.run_dir, iter_n, script_set)
+    query_path_obj, sort_path_objs = snapshot_script_set(ctx.run_dir, iter_n, script_set)
+    query_path = str(query_path_obj)
+    sort_paths = [str(p) for p in sort_path_objs]
 
-    compile_error = _compile_check(ctx, script_set)
-    if compile_error is not None:
-        record = IterationRecord(
-            iter=iter_n,
-            timestamp=timestamp,
-            query_script_path=str(query_path),
-            sort_script_paths=[str(p) for p in sort_paths],
-            metrics=None,
-            eval_users=0,
-            eval_seconds=0.0,
-            llm_rationale=rationale,
-            parent_iter=parent,
-            compile_error=compile_error,
-            partial_failure=False,
-            sample_error=None,
+    outcome = _compile_then_evaluate(ctx, script_set)
+    if isinstance(outcome, str):
+        ctx.run_log.append(
+            _make_failure_record(
+                iter_n=iter_n,
+                timestamp=timestamp,
+                query_path=query_path,
+                sort_paths=sort_paths,
+                rationale=rationale,
+                parent=parent,
+                error_msg=outcome,
+            )
         )
-        ctx.run_log.append(record)
         return {
             "ok": False,
             "iter": iter_n,
-            "compile_error": compile_error,
+            "compile_error": outcome,
             "failed_script": None,
         }
 
-    try:
-        result = evaluate(
-            ctx.es,
-            script_set,
-            ctx.ground_truth,
-            ctx.users_by_id,
-            k=ctx.k,
-            diversity_fields=ctx.diversity_fields,
-            index=ctx.index,
-        )
-    except RuntimeError as exc:
-        msg = str(exc)
-        record = IterationRecord(
-            iter=iter_n,
-            timestamp=timestamp,
-            query_script_path=str(query_path),
-            sort_script_paths=[str(p) for p in sort_paths],
-            metrics=None,
-            eval_users=0,
-            eval_seconds=0.0,
-            llm_rationale=rationale,
-            parent_iter=parent,
-            compile_error=msg,
-            partial_failure=False,
-            sample_error=None,
-        )
-        ctx.run_log.append(record)
-        return {"ok": False, "iter": iter_n, "compile_error": msg, "failed_script": None}
-
+    result = outcome
     record = IterationRecord(
         iter=iter_n,
         timestamp=timestamp,
-        query_script_path=str(query_path),
-        sort_script_paths=[str(p) for p in sort_paths],
+        query_script_path=query_path,
+        sort_script_paths=sort_paths,
         metrics=result.metrics,
         eval_users=result.eval_users,
         eval_seconds=result.eval_seconds,
@@ -269,6 +289,28 @@ def _inline_sources(record: IterationRecord) -> dict[str, Any]:
     return {"query_source": query_source, "sort_sources": sort_sources}
 
 
+def _check_guardrail(
+    metrics: dict[str, float | None] | None,
+    key: str,
+    baseline: dict[str, float | None],
+) -> bool:
+    """Return ``True`` iff ``metrics[key]`` is at least the baseline value.
+
+    A missing baseline is treated as vacuously holding; a missing
+    record value (or ``metrics is None``) is treated as not holding —
+    failures shouldn't be allowed to claim the guardrail.
+    """
+    if not metrics:
+        return False
+    baseline_value = baseline.get(key)
+    if baseline_value is None:
+        return True
+    record_value = metrics.get(key)
+    if record_value is None:
+        return False
+    return record_value >= baseline_value
+
+
 def _record_to_dict(
     record: IterationRecord,
     *,
@@ -276,22 +318,10 @@ def _record_to_dict(
     guardrail_key: str,
     baseline_metrics: dict[str, float | None],
 ) -> dict[str, Any]:
-    metrics = record.metrics
-    if metrics is None:
-        guardrail_held = False
-    else:
-        baseline_value = baseline_metrics.get(guardrail_key)
-        record_value = metrics.get(guardrail_key)
-        if baseline_value is None:
-            guardrail_held = True
-        elif record_value is None:
-            guardrail_held = False
-        else:
-            guardrail_held = record_value >= baseline_value
     payload: dict[str, Any] = {
         "iter": record.iter,
         "timestamp": record.timestamp,
-        "metrics": metrics,
+        "metrics": record.metrics,
         "eval_users": record.eval_users,
         "eval_seconds": record.eval_seconds,
         "llm_rationale": record.llm_rationale,
@@ -299,7 +329,7 @@ def _record_to_dict(
         "compile_error": record.compile_error,
         "partial_failure": record.partial_failure,
         "sample_error": record.sample_error,
-        "guardrail_held": guardrail_held,
+        "guardrail_held": _check_guardrail(record.metrics, guardrail_key, baseline_metrics),
     }
     if include_sources:
         payload.update(_inline_sources(record))
@@ -312,8 +342,7 @@ def _read_history_impl(
     include_sources: bool,
 ) -> dict[str, Any]:
     all_records = ctx.run_log.read_all()
-    primary_key = _primary_key(ctx.objective, ctx.k)
-    guardrail_key = _guardrail_key(ctx.objective, ctx.k)
+    primary_key, guardrail_key = _metric_keys(ctx.objective, ctx.k)
 
     sliced = all_records[-last_n:] if last_n > 0 else []
     records_out = [
