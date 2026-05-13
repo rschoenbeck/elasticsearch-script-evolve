@@ -25,6 +25,12 @@ _REGISTERED: frozenset[str] = frozenset({"default"})
 class DatasetAdapter(Protocol):
     """Contract every dataset adapter must satisfy.
 
+    Each ``iter_*`` method must be independently re-iterable: callers
+    invoke them more than once per run (e.g. the baseline CLI reads
+    interactions then users), and a one-shot generator backed by
+    shared iterator state would silently yield an empty stream on
+    the second call.
+
     Attributes:
         vector_dim: Common dimensionality of item and user vectors.
             Asserted equal across both at index time.

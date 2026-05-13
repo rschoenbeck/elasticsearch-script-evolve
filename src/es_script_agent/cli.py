@@ -24,6 +24,13 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _positive_int(raw: str) -> int:
+    value = int(raw)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {value}")
+    return value
+
+
 def setup_indices_cmd() -> None:
     """Drop, recreate, and bulk-load the ``loans`` and ``users`` indices."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -58,7 +65,7 @@ def baseline_cmd() -> None:
     parser = argparse.ArgumentParser(prog="baseline")
     parser.add_argument("--dataset", default="default")
     parser.add_argument("--objective", default=config.DEFAULT_OBJECTIVE, choices=("ndcg", "ild"))
-    parser.add_argument("--k", type=int, default=10)
+    parser.add_argument("--k", type=_positive_int, default=10)
     args = parser.parse_args()
 
     adapter = load_dataset(args.dataset)

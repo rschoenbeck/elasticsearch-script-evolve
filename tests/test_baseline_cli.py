@@ -150,6 +150,39 @@ def test_baseline_prints_all_four_metrics(
         assert key in out
 
 
+def test_baseline_objective_flag_recorded_in_meta(
+    monkeypatch: pytest.MonkeyPatch,
+    stubbed_baseline_env: dict[str, Any],
+) -> None:
+    monkeypatch.setattr("sys.argv", ["baseline", "--objective", "ild"])
+    cli.baseline_cmd()
+    runs_dir: Path = stubbed_baseline_env["runs_dir"]
+    meta = json.loads((next(runs_dir.iterdir()) / "meta.json").read_text())
+    assert meta["objective"] == "ild"
+
+
+def test_baseline_k_flag_threads_into_metrics_and_meta(
+    monkeypatch: pytest.MonkeyPatch,
+    stubbed_baseline_env: dict[str, Any],
+) -> None:
+    monkeypatch.setattr("sys.argv", ["baseline", "--k", "5"])
+    cli.baseline_cmd()
+    runs_dir: Path = stubbed_baseline_env["runs_dir"]
+    meta = json.loads((next(runs_dir.iterdir()) / "meta.json").read_text())
+    assert meta["k"] == 5
+    # baseline_metrics keys carry the configured K, not a hardcoded 10.
+    assert "ndcg@5" in meta["baseline_metrics"]
+
+
+def test_baseline_rejects_non_positive_k(
+    monkeypatch: pytest.MonkeyPatch,
+    stubbed_baseline_env: dict[str, Any],
+) -> None:
+    monkeypatch.setattr("sys.argv", ["baseline", "--k", "0"])
+    with pytest.raises(SystemExit):
+        cli.baseline_cmd()
+
+
 def test_baseline_drops_unindexed_ground_truth(
     monkeypatch: pytest.MonkeyPatch,
     stubbed_baseline_env: dict[str, Any],
