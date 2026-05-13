@@ -370,17 +370,14 @@ def _read_history_impl(
         for r in sliced
     ]
 
-    best_record: IterationRecord | None = None
-    best_value: float = float("-inf")
-    for r in all_records:
-        if not r.metrics:
-            continue
-        value = r.metrics.get(primary_key)
-        if value is None:
-            continue
-        if value > best_value:
-            best_value = value
-            best_record = r
+    scored_records = [
+        r for r in all_records if r.metrics and r.metrics.get(primary_key) is not None
+    ]
+    best_record = (
+        max(scored_records, key=lambda r: r.metrics[primary_key])
+        if scored_records
+        else None
+    )
     best_so_far = (
         _record_to_dict(
             best_record,
