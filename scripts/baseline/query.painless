@@ -5,20 +5,19 @@ if (doc['item_vector'].size() == 0) {
 }
 
 // params.user_vector is a 10x32 List<List<Double>>. Mean-pool into a
-// single 32-d double[] so we can pass it to cosineSimilarity(double[],
-// 'field') — the supported overload for raw arrays in 8.13.
+// single 32-d ArrayList<Double> — cosineSimilarity's vector argument is
+// List<Number>; the double[] overload referenced in older notes does
+// not exist in 8.13 and triggers a class_cast_exception at compile.
 List userVectors = params.user_vector;
 int n = userVectors.size();
 int dim = ((List) userVectors.get(0)).size();
-double[] pooled = new double[dim];
-for (int i = 0; i < n; i++) {
-  List v = (List) userVectors.get(i);
-  for (int j = 0; j < dim; j++) {
-    pooled[j] += ((Number) v.get(j)).doubleValue();
-  }
-}
+ArrayList pooled = new ArrayList();
 for (int j = 0; j < dim; j++) {
-  pooled[j] /= n;
+  double sum = 0.0;
+  for (int i = 0; i < n; i++) {
+    sum += ((Number) ((List) userVectors.get(i)).get(j)).doubleValue();
+  }
+  pooled.add(sum / n);
 }
 
 // Shift cosine from [-1, 1] into [0, 2] to stay non-negative.

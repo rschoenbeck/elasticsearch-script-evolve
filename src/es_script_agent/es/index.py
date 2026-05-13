@@ -12,7 +12,7 @@ import itertools
 import logging
 from typing import Any, Iterable, Iterator, TypeVar
 
-from elasticsearch.helpers import bulk
+from elasticsearch.helpers import bulk, scan
 
 from es_script_agent.data import DatasetAdapter
 from es_script_agent.data.schema import Item, User
@@ -160,4 +160,24 @@ def setup_indices(
     return {
         LOANS_INDEX: es.count(index=LOANS_INDEX)["count"],
         USERS_INDEX: es.count(index=USERS_INDEX)["count"],
+    }
+
+
+def fetch_indexed_item_ids(es: Any, index: str = LOANS_INDEX) -> set[str]:
+    """Return every ``_id`` currently in the index.
+
+    Used by the eval CLIs to filter ground-truth positives against
+    actually-retrievable items — positives whose item id is missing
+    silently depress Recall/NDCG denominators (see Task 8a).
+
+    Args:
+        es: Connected Elasticsearch client.
+        index: Source index name.
+
+    Returns:
+        Set of document ids. Empty if the index is empty.
+    """
+    return {
+        hit["_id"]
+        for hit in scan(es, index=index, query={"query": {"match_all": {}}}, _source=False)
     }
