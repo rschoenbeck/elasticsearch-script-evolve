@@ -4,7 +4,7 @@ Project-specific guidance for working in this repo. The authoritative documents 
 
 ## What this is
 
-A single-user research harness: a LangGraph agent iteratively rewrites Painless scoring scripts and is graded on IR metrics (NDCG@10, Recall@10, Precision@10, ILD@10) against a local Elasticsearch index of Kiva loans. Each iteration emits **one query script + zero-to-N sort scripts**; the harness owns the surrounding JSON shape.
+A single-user research harness: a LangGraph agent iteratively rewrites Painless scoring scripts and is graded on IR metrics (NDCG@10, Recall@10, Precision@10, ILD@10) against a local Elasticsearch index of loans. Each iteration emits **one query script + zero-to-N sort scripts**; the harness owns the surrounding JSON shape.
 
 Out of scope: production deployment, multi-user serving, model training, online learning, distributed ES. Don't add infrastructure for any of these.
 
