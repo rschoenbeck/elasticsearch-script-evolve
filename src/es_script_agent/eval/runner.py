@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -154,7 +154,6 @@ def evaluate(
     k: int = 10,
     diversity_fields: Sequence[str] = config.ILD_DIVERSITY_FIELDS,
     index: str = LOANS_INDEX,
-    extra_params_per_user: Callable[[str], dict[str, Any]] | None = None,
 ) -> EvalResult:
     """Run ``script_set`` against every user in ``ground_truth``.
 
@@ -180,18 +179,17 @@ def evaluate(
         diversity_fields: Field names used for ILD and for the
             ``_source.includes`` request.
         index: Elasticsearch index to search.
-        extra_params_per_user: Optional hook returning extra script
-            params to merge for a given user id. Intended for tests
-            (the fake ES uses it to identify the user); production
-            callers can leave it unset.
 
     Returns:
         :class:`EvalResult` with aggregated metrics, counts, timings,
         and a sample error if any user failed.
 
     Raises:
+        ValueError: If ``ground_truth`` is empty.
         RuntimeError: If every user in ``ground_truth`` fails.
     """
+    if not ground_truth:
+        raise ValueError("ground_truth is empty; cannot evaluate")
     start = time.monotonic()
     per_user: list[dict[str, float | None]] = []
     failed = 0
@@ -205,13 +203,11 @@ def evaluate(
                 sample_error = f"user {user_id!r} missing from users_by_id"
             logger.warning("skipping user %r: no vector available", user_id)
             continue
-        extra = extra_params_per_user(user_id) if extra_params_per_user else None
         body = build_query(
             query_source=script_set.query_source,
             sort_sources=script_set.sort_sources,
             user_vector=user.vector,
             size=k,
-            extra_params=extra,
         )
         body["_source"] = {"includes": list(diversity_fields)}
         try:
