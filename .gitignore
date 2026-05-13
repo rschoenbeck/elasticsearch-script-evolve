@@ -232,9 +232,8 @@ tasks/
 # Run artefacts (per-run snapshots, JSONL logs)
 runs/
 
-# Private scripts kept out of version control:
-#   scripts/reference/ — few-shot examples seeded to the agent
-#   scripts/baseline/ — actual baseline query + sort sequence used at runtime
-# Generic, committable baseline scripts will be added in a later update.
+# Private script sets kept out of version control:
+#   scripts/reference/ — user-supplied few-shot script sets seeded to the agent
+# The generic baseline at scripts/baseline/ is tracked as the reference
+# implementation of the script-set directory contract.
 scripts/reference/
-scripts/baseline/

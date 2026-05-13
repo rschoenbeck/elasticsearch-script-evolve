@@ -6,8 +6,8 @@ import argparse
 import logging
 
 from es_script_agent.data import load_dataset
-from es_script_agent.es_client import make_client
-from es_script_agent.indices.load import setup_indices
+from es_script_agent.es.client import make_client
+from es_script_agent.es.load import setup_indices
 
 
 def setup_indices_cmd() -> None:

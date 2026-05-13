@@ -16,7 +16,7 @@ from elasticsearch.helpers import bulk
 
 from es_script_agent.data import DatasetAdapter
 from es_script_agent.data.schema import Item, User
-from es_script_agent.indices.schemas import (
+from es_script_agent.es.schemas import (
     ITEM_VECTOR_FIELD,
     LOANS_INDEX,
     NUM_USER_VECTORS,

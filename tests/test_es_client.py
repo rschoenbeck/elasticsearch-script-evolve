@@ -2,7 +2,7 @@
 
 from elasticsearch import Elasticsearch
 
-from es_script_agent import es_client
+from es_script_agent.es import client as es_client
 
 
 def test_make_client_default_url() -> None:

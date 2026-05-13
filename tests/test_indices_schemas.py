@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from es_script_agent.indices.schemas import (
+from es_script_agent.es.schemas import (
     USER_VECTOR_FIELDS,
     loans_mapping,
     users_mapping,

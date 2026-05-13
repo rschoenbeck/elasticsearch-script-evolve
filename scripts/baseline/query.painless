@@ -1,0 +1,25 @@
+// script_score requires a non-negative return; bail out when the doc has
+// no indexed vector rather than letting cosineSimilarity throw.
+if (doc['item_vector'].size() == 0) {
+  return 0.0;
+}
+
+// params.user_vector is a 10x32 List<List<Double>>. Mean-pool into a
+// single 32-d double[] so we can pass it to cosineSimilarity(double[],
+// 'field') — the supported overload for raw arrays in 8.13.
+List userVectors = params.user_vector;
+int n = userVectors.size();
+int dim = ((List) userVectors.get(0)).size();
+double[] pooled = new double[dim];
+for (int i = 0; i < n; i++) {
+  List v = (List) userVectors.get(i);
+  for (int j = 0; j < dim; j++) {
+    pooled[j] += ((Number) v.get(j)).doubleValue();
+  }
+}
+for (int j = 0; j < dim; j++) {
+  pooled[j] /= n;
+}
+
+// Shift cosine from [-1, 1] into [0, 2] to stay non-negative.
+return cosineSimilarity(pooled, 'item_vector') + 1.0;

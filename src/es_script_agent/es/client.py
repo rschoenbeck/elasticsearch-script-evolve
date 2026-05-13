@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from elasticsearch import Elasticsearch
 
-from . import config
+from es_script_agent import config
 
 
 def make_client(url: str | None = None) -> Elasticsearch:
