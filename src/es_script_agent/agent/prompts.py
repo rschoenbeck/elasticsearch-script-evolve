@@ -9,8 +9,9 @@ script sets. It is rendered once at CLI entry and passed verbatim to
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from es_script_agent.eval.runner import load_script_set
 
@@ -39,10 +40,10 @@ Available bindings inside every script:
 - ``doc['item_vector']`` — the indexed 32-d item vector. Check
   ``doc['item_vector'].size() == 0`` and bail out with ``0.0`` before
   calling ``cosineSimilarity`` on missing vectors.
-- ``doc['<attr>']`` for the indexed attributes (sector, country,
-  partnerId, activityId, gender, loanAmount, popularityScore,
-  researchScore, partnerRiskRating, borrowerCount, fundraisingDate,
-  themesIds).
+- ``doc['<attr>']`` for the indexed item attributes (name → ES type):
+{attribute_lines}
+  Optional values may be missing on individual docs — guard with
+  ``doc['<attr>'].size() == 0`` before reading ``.value``.
 - ``_score`` — available inside every sort script and resolves to the
   value returned by the query script for that document.
 
@@ -111,6 +112,7 @@ def build_system_prompt(
     diversity_fields: Sequence[str],
     max_sort_scripts: int,
     reference_dir: Path,
+    attribute_fields: Mapping[str, Mapping[str, Any]],
     k: int = 10,
 ) -> str:
     """Render the system prompt for one run.
@@ -126,6 +128,10 @@ def build_system_prompt(
             exists and contains script-set subdirectories, each is
             inlined as a labelled example. Missing or empty → no
             example block.
+        attribute_fields: Per-attribute ES field-type mapping (as
+            produced by ``DatasetAdapter.attribute_field_types``). Used
+            to render the list of ``doc[...]`` bindings so the prompt
+            cannot drift from the actual index mapping.
         k: Top-K cutoff for metric labels (e.g. ``ndcg@10`` when ``k=10``).
 
     Returns:
@@ -141,9 +147,15 @@ def build_system_prompt(
             return "n/a"
         return f"{value:.4f}"
 
+    attribute_lines = "\n".join(
+        f"  - ``doc['{name}']`` ({defn.get('type', '?')})"
+        for name, defn in sorted(attribute_fields.items())
+    )
+
     body = _BASE.format(
         max_sort_scripts=max_sort_scripts,
         diversity_fields=", ".join(diversity_fields),
+        attribute_lines=attribute_lines,
         objective_word=objective_word,
         ndcg_value=_fmt(f"ndcg@{k}"),
         recall_value=_fmt(f"recall@{k}"),

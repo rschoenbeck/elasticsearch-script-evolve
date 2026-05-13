@@ -89,7 +89,7 @@ def _make_ctx(
         run_log=log,
         ground_truth={"u1": {"item_pos"}},
         users_by_id={"u1": _user("u1", 1.0)},
-        indexed_ids={"item_pos"},
+        indexed_item_ids={"item_pos"},
         baseline_metrics=baseline_metrics or _baseline_metrics(),
         objective=objective,
         max_iters=max_iters,
@@ -489,6 +489,15 @@ def test_read_history_does_not_touch_es(tmp_path: Path) -> None:
 # --- system prompt builder ----------------------------------------------
 
 
+_SAMPLE_ATTRIBUTE_FIELDS: dict[str, dict[str, Any]] = {
+    "sector": {"type": "keyword"},
+    "country": {"type": "keyword"},
+    "partnerId": {"type": "keyword"},
+    "loanAmount": {"type": "double"},
+    "popularityScore": {"type": "integer"},
+}
+
+
 def test_build_system_prompt_includes_contract_fragments() -> None:
     from es_script_agent.agent.prompts import build_system_prompt
 
@@ -498,6 +507,7 @@ def test_build_system_prompt_includes_contract_fragments() -> None:
         diversity_fields=("sector", "country", "partnerId"),
         max_sort_scripts=5,
         reference_dir=Path("/does/not/exist"),
+        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
     )
     assert "user_vector" in prompt
     assert "item_vector" in prompt
@@ -515,6 +525,40 @@ def test_build_system_prompt_includes_contract_fragments() -> None:
     assert "read_history" in prompt
 
 
+def test_build_system_prompt_renders_attribute_fields_with_types() -> None:
+    """Each declared attribute should appear with its ES type."""
+    from es_script_agent.agent.prompts import build_system_prompt
+
+    prompt = build_system_prompt(
+        baseline_metrics={"ndcg@10": 0.30, "recall@10": 0.20, "precision@10": 0.10, "ild@10": 0.40},
+        objective="ndcg",
+        diversity_fields=("sector",),
+        max_sort_scripts=5,
+        reference_dir=Path("/does/not/exist"),
+        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+    )
+    assert "doc['loanAmount']" in prompt and "double" in prompt
+    assert "doc['popularityScore']" in prompt and "integer" in prompt
+    assert "doc['partnerId']" in prompt and "keyword" in prompt
+
+
+def test_build_system_prompt_does_not_leak_hardcoded_field_names() -> None:
+    """Prompt must not name fields the caller didn't pass in."""
+    from es_script_agent.agent.prompts import build_system_prompt
+
+    prompt = build_system_prompt(
+        baseline_metrics={"ndcg@10": 0.30, "recall@10": 0.20, "precision@10": 0.10, "ild@10": 0.40},
+        objective="ndcg",
+        diversity_fields=("sector",),
+        max_sort_scripts=5,
+        reference_dir=Path("/does/not/exist"),
+        attribute_fields={"sector": {"type": "keyword"}},
+    )
+    # Stale names from earlier hardcoded list — must not appear unless passed in.
+    for stale in ("activityId", "researchScore", "partnerRiskRating"):
+        assert stale not in prompt, f"prompt still references stale field {stale!r}"
+
+
 def test_build_system_prompt_objective_flips_primary_and_guardrail() -> None:
     from es_script_agent.agent.prompts import build_system_prompt
 
@@ -524,6 +568,7 @@ def test_build_system_prompt_objective_flips_primary_and_guardrail() -> None:
         diversity_fields=("sector",),
         max_sort_scripts=5,
         reference_dir=Path("/does/not/exist"),
+        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
     )
     ild_prompt = build_system_prompt(
         baseline_metrics={"ndcg@10": 0.30, "recall@10": 0.20, "precision@10": 0.10, "ild@10": 0.40},
@@ -531,6 +576,7 @@ def test_build_system_prompt_objective_flips_primary_and_guardrail() -> None:
         diversity_fields=("sector",),
         max_sort_scripts=5,
         reference_dir=Path("/does/not/exist"),
+        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
     )
     # Same metrics, flipped framing → outputs differ.
     assert ndcg_prompt != ild_prompt
@@ -551,6 +597,7 @@ def test_build_system_prompt_inlines_reference_script_sets(tmp_path: Path) -> No
         diversity_fields=("sector",),
         max_sort_scripts=5,
         reference_dir=ref_dir,
+        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
     )
     assert "popularity-boost" in prompt
     assert "RETURN_Q_POPULARITY;" in prompt
@@ -567,6 +614,7 @@ def test_build_system_prompt_skips_reference_block_when_dir_empty(tmp_path: Path
         diversity_fields=("sector",),
         max_sort_scripts=5,
         reference_dir=tmp_path / "missing",
+        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
     )
     # No exception; output is non-empty.
     assert out_missing.strip()
