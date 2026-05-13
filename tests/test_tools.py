@@ -12,9 +12,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from es_script_agent.agent.tools import ToolContext, make_tools
 from es_script_agent.data.schema import User
-from es_script_agent.es.query import MAX_SORT_SCRIPTS
+from es_script_agent.es.query import DEFAULT_MAX_SORT_SCRIPTS
 from es_script_agent.runlog import RunLog
 
 
@@ -74,6 +76,7 @@ def _make_ctx(
     *,
     es: _FakeES | None = None,
     max_iters: int = 5,
+    max_sort_scripts: int = DEFAULT_MAX_SORT_SCRIPTS,
     objective: str = "ndcg",
     baseline_metrics: dict[str, float | None] | None = None,
     seed_baseline: bool = True,
@@ -93,7 +96,7 @@ def _make_ctx(
         baseline_metrics=baseline_metrics or _baseline_metrics(),
         objective=objective,
         max_iters=max_iters,
-        max_sort_scripts=MAX_SORT_SCRIPTS,
+        max_sort_scripts=max_sort_scripts,
         k=10,
         diversity_fields=("sector", "country"),
     )
@@ -253,7 +256,7 @@ def test_eval_scripts_compile_failure_advances_iter_counter(tmp_path: Path) -> N
 def test_eval_scripts_rejects_too_many_sort_scripts_without_snapshot(tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path)
     tools = _tools_by_name(make_tools(ctx))
-    too_many = ["return 0.0;"] * (MAX_SORT_SCRIPTS + 1)
+    too_many = ["return 0.0;"] * (DEFAULT_MAX_SORT_SCRIPTS + 1)
 
     result = _invoke(
         tools["eval_scripts"],
@@ -263,10 +266,48 @@ def test_eval_scripts_rejects_too_many_sort_scripts_without_snapshot(tmp_path: P
     )
 
     assert result["ok"] is False
+    assert "iter" in result, "pre-snapshot failures must still report the next iter slot"
     assert "too many sort scripts" in result.get("error", "").lower()
     # No iter_001 dir was created; no JSONL line was appended.
     assert not (ctx.run_dir / "iter_001").exists()
     assert [r.iter for r in ctx.run_log.read_all()] == [0]
+
+
+def test_eval_scripts_honors_raised_max_sort_scripts_above_default(tmp_path: Path) -> None:
+    """A ctx.max_sort_scripts above the module default is honored end-to-end."""
+    raised = DEFAULT_MAX_SORT_SCRIPTS + 2
+    ctx = _make_ctx(tmp_path, max_sort_scripts=raised)
+    tools = _tools_by_name(make_tools(ctx))
+    sort_sources = ["return 0.0;"] * raised
+
+    result = _invoke(
+        tools["eval_scripts"],
+        query_source="Q",
+        sort_sources=sort_sources,
+        rationale="raise the cap",
+    )
+
+    assert result["ok"] is True
+    records = ctx.run_log.read_all()
+    assert len(records[-1].sort_script_paths) == raised
+
+
+def test_tool_context_rejects_empty_users_by_id(tmp_path: Path) -> None:
+    """An empty user dict is a run-setup bug, not an agent-recoverable error."""
+    run_dir = tmp_path / "run_x"
+    run_dir.mkdir()
+    log = RunLog(run_dir)
+    log.write_header({})
+    with pytest.raises(ValueError, match="users_by_id is empty"):
+        ToolContext(
+            es=_FakeES(),
+            run_dir=run_dir,
+            run_log=log,
+            ground_truth={},
+            users_by_id={},
+            indexed_item_ids=set(),
+            baseline_metrics=_baseline_metrics(),
+        )
 
 
 def test_eval_scripts_budget_exhausted_on_second_call_when_max_iters_1(tmp_path: Path) -> None:

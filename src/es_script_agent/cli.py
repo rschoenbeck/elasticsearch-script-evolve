@@ -12,7 +12,7 @@ from es_script_agent import config
 from es_script_agent.data import load_dataset
 from es_script_agent.es.client import make_client
 from es_script_agent.es.index import fetch_indexed_item_ids, setup_indices
-from es_script_agent.es.query import MAX_SORT_SCRIPTS
+from es_script_agent.es.query import DEFAULT_MAX_SORT_SCRIPTS
 from es_script_agent.es.schemas import LOANS_INDEX
 from es_script_agent.eval.interactions import build_ground_truth, filter_to_indexed_items
 from es_script_agent.eval.runner import ScriptSet, evaluate, load_script_set
@@ -107,7 +107,7 @@ def baseline_cmd() -> None:
             "k": args.k,
             "cohort_size": len(ground_truth),
             "seed": 0,
-            "max_sort_scripts": MAX_SORT_SCRIPTS,
+            "max_sort_scripts": DEFAULT_MAX_SORT_SCRIPTS,
             "harness_version": pkg_version("elasticsearch-agentic-script-sorting"),
             "created_at": started_at,
             "ild_diversity_fields": list(config.ILD_DIVERSITY_FIELDS),

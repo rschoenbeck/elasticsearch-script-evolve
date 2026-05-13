@@ -3,11 +3,16 @@
 The harness owns the surrounding JSON shape: ``match_all`` candidate set,
 ``script_score`` query clause, sort-script ordering, and the ``_score desc``
 tie-break. The agent edits only the Painless ``source`` strings and the count
-of sort scripts (bounded by :data:`MAX_SORT_SCRIPTS`).
+of sort scripts.
 
 ``params.user_vector`` is harness-owned and injected identically into the
 query script and every sort script, so a sort script can reference it without
 re-plumbing.
+
+:data:`DEFAULT_MAX_SORT_SCRIPTS` is the default sort-script cap surfaced
+to the agent and the CLI. It is policy, not a hard invariant — the per-run
+cap is enforced by the agent tool layer, so this constant is purely a
+default consumers can reference.
 """
 
 from __future__ import annotations
@@ -15,7 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 
-MAX_SORT_SCRIPTS: int = 5
+DEFAULT_MAX_SORT_SCRIPTS: int = 5
 
 
 def build_query(
@@ -30,8 +35,9 @@ def build_query(
     Args:
         query_source: Painless source for the single ``script_score`` clause.
             Must be non-empty (non-whitespace).
-        sort_sources: Ordered Painless sources for sort scripts. Length must
-            be ``<= MAX_SORT_SCRIPTS``. May be empty.
+        sort_sources: Ordered Painless sources for sort scripts. May be empty.
+            Cap enforcement is the caller's responsibility — this function
+            assembles whatever it is given.
         user_vector: The 2D user representation (e.g. 10 vectors of 32 dims).
             Injected verbatim into every script's ``params``.
         size: Top-K to return from ES.
@@ -45,16 +51,11 @@ def build_query(
         tie-break.
 
     Raises:
-        ValueError: If ``query_source`` is blank, ``sort_sources`` exceeds
-            ``MAX_SORT_SCRIPTS``, or ``extra_params`` tries to shadow the
-            reserved ``user_vector`` key.
+        ValueError: If ``query_source`` is blank or ``extra_params`` tries
+            to shadow the reserved ``user_vector`` key.
     """
     if not query_source or not query_source.strip():
         raise ValueError("query_source must be a non-empty Painless source string")
-    if len(sort_sources) > MAX_SORT_SCRIPTS:
-        raise ValueError(
-            f"too many sort scripts: {len(sort_sources)} > MAX_SORT_SCRIPTS={MAX_SORT_SCRIPTS}"
-        )
     if extra_params is not None and "user_vector" in extra_params:
         raise ValueError(
             "extra_params must not contain reserved key 'user_vector'; the harness owns that param"

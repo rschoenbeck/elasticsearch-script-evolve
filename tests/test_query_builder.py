@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from es_script_agent.es.query import MAX_SORT_SCRIPTS, build_query
+from es_script_agent.es.query import DEFAULT_MAX_SORT_SCRIPTS, build_query
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -122,22 +122,25 @@ def test_empty_sort_yields_score_tiebreak_only() -> None:
 # --- Validation ---------------------------------------------------------
 
 
-def test_max_sort_scripts_allowed() -> None:
+def test_default_max_sort_scripts_allowed() -> None:
+    """build_query accepts up to DEFAULT_MAX_SORT_SCRIPTS — the policy default."""
     out = build_query(
         query_source="return 1.0;",
-        sort_sources=["return 0.0;"] * MAX_SORT_SCRIPTS,
+        sort_sources=["return 0.0;"] * DEFAULT_MAX_SORT_SCRIPTS,
         user_vector=_deterministic_user_vector(),
     )
-    assert len(out["sort"]) == MAX_SORT_SCRIPTS + 1  # + _score tie-break
+    assert len(out["sort"]) == DEFAULT_MAX_SORT_SCRIPTS + 1  # + _score tie-break
 
 
-def test_exceeding_max_sort_scripts_raises() -> None:
-    with pytest.raises(ValueError, match="sort"):
-        build_query(
-            query_source="return 1.0;",
-            sort_sources=["return 0.0;"] * (MAX_SORT_SCRIPTS + 1),
-            user_vector=_deterministic_user_vector(),
-        )
+def test_build_query_assembles_above_default_cap() -> None:
+    """build_query has no cap of its own; the per-run cap lives at the tool layer."""
+    n = DEFAULT_MAX_SORT_SCRIPTS + 3
+    out = build_query(
+        query_source="return 1.0;",
+        sort_sources=["return 0.0;"] * n,
+        user_vector=_deterministic_user_vector(),
+    )
+    assert len(out["sort"]) == n + 1
 
 
 def test_empty_query_source_raises() -> None:

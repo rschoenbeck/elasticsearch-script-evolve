@@ -34,7 +34,7 @@ from langchain_core.tools import BaseTool, tool
 from es_script_agent import config
 from es_script_agent.data.schema import User
 from es_script_agent.es.client import format_es_error
-from es_script_agent.es.query import MAX_SORT_SCRIPTS, build_query
+from es_script_agent.es.query import DEFAULT_MAX_SORT_SCRIPTS, build_query
 from es_script_agent.es.schemas import LOANS_INDEX
 from es_script_agent.eval.runner import EvalResult, ScriptSet, evaluate
 from es_script_agent.runlog import (
@@ -99,12 +99,28 @@ class ToolContext:
     baseline_metrics: dict[str, float | None]
     objective: str = config.DEFAULT_OBJECTIVE
     max_iters: int = 20
-    max_sort_scripts: int = MAX_SORT_SCRIPTS
+    max_sort_scripts: int = DEFAULT_MAX_SORT_SCRIPTS
     k: int = 10
     diversity_fields: Sequence[str] = field(default_factory=lambda: config.ILD_DIVERSITY_FIELDS)
     index: str = LOANS_INDEX
     iter_counter: int = 1
     last_success_iter: int | None = 0
+    # Pinned at construction so every compile-check uses the same user vector
+    # and we don't re-sort the user dict on every tool call. Internal; not
+    # exposed as a constructor arg.
+    _compile_check_user_id: str = field(init=False, default="")
+
+    def __post_init__(self) -> None:
+        if not self.users_by_id:
+            raise ValueError(
+                "users_by_id is empty; ToolContext needs at least one user vector "
+                "for the compile-check and the eval cohort"
+            )
+        if self.max_sort_scripts < 0:
+            raise ValueError(
+                f"max_sort_scripts must be non-negative; got {self.max_sort_scripts}"
+            )
+        self._compile_check_user_id = min(self.users_by_id)
 
 
 def _utc_now_iso() -> str:
@@ -122,22 +138,20 @@ def _compile_check(ctx: ToolContext, script_set: ScriptSet) -> str | None:
     """Run a ``size=1`` search exercising the full script set.
 
     Returns ``None`` on success, or a stringified error message on
-    failure. The compile-check uses the first user in ``users_by_id``
-    (sorted by id for determinism) as a representative vector — the
-    same shape Painless will see at full-eval time, so a body that
-    fails this check would fail every per-user call.
+    failure. The user vector is the one pinned at ``ToolContext``
+    construction — the same shape Painless will see at full-eval time,
+    so a body that fails this check would fail every per-user call.
+    ``_source`` is disabled because the response is only inspected for
+    raised errors, not read.
     """
-    if not ctx.users_by_id:
-        return "no users available for compile-check"
-    first_user_id = next(iter(sorted(ctx.users_by_id)))
-    user = ctx.users_by_id[first_user_id]
+    user = ctx.users_by_id[ctx._compile_check_user_id]
     body = build_query(
         query_source=script_set.query_source,
         sort_sources=script_set.sort_sources,
         user_vector=user.vector,
         size=1,
     )
-    body["_source"] = {"includes": list(ctx.diversity_fields)}
+    body["_source"] = False
     try:
         ctx.es.search(index=ctx.index, body=body)
     except Exception as exc:
@@ -214,6 +228,7 @@ def _eval_scripts_impl(
     if len(sort_sources) > ctx.max_sort_scripts:
         return {
             "ok": False,
+            "iter": ctx.iter_counter,
             "error": (
                 f"too many sort scripts: {len(sort_sources)} > "
                 f"max_sort_scripts={ctx.max_sort_scripts}"
@@ -223,7 +238,7 @@ def _eval_scripts_impl(
     try:
         script_set = ScriptSet(query_source=query_source, sort_sources=list(sort_sources))
     except Exception as exc:
-        return {"ok": False, "error": f"invalid script set: {exc}"}
+        return {"ok": False, "iter": ctx.iter_counter, "error": f"invalid script set: {exc}"}
 
     iter_n = ctx.iter_counter
     ctx.iter_counter += 1
