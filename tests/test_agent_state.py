@@ -27,7 +27,8 @@ def test_agent_state_defaults() -> None:
     state = AgentState()
     assert state.iter == 0
     assert state.history == []
-    assert state.current_source is None
+    assert state.current_query_source is None
+    assert state.current_sort_sources is None
     assert state.current_rationale is None
     assert state.parent_iter is None
 
@@ -43,7 +44,8 @@ def test_agent_state_round_trip_with_history() -> None:
     state = AgentState(
         iter=2,
         history=[_record(0), _record(1)],
-        current_source="return 1.0;",
+        current_query_source="return 1.0;",
+        current_sort_sources=["return doc['popularityScore'].value;"],
         current_rationale="trying mean pooling",
         parent_iter=1,
     )
