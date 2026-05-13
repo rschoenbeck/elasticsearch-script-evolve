@@ -6,6 +6,9 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      # Default is 150/5m per context; the research harness compiles many
+      # distinct Painless sources across iterations and trips it easily.
+      - script.max_compilations_rate=10000/1m
     ports:
       - "9200:9200"
     volumes:

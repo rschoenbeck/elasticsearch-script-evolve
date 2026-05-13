@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from es_script_agent import config
 from es_script_agent.data.schema import User
+from es_script_agent.es.client import format_es_error
 from es_script_agent.es.query import MAX_SORT_SCRIPTS, build_query
 from es_script_agent.es.schemas import LOANS_INDEX
 from es_script_agent.eval.metrics import (
@@ -215,8 +216,11 @@ def evaluate(
         except Exception as exc:  # pragma: no cover - exercised via fake
             failed += 1
             if sample_error is None:
-                sample_error = f"user {user_id!r}: {exc}"
-            logger.warning("user %r failed: %s", user_id, exc)
+                detail = format_es_error(exc)
+                sample_error = f"user {user_id!r}: {detail}"
+                logger.warning("user %r failed: %s", user_id, detail)
+            else:
+                logger.warning("user %r failed: %s", user_id, exc)
             continue
         ranked_ids, ranked_sources = _extract_ranked(response)
         per_user.append(

@@ -263,6 +263,66 @@ def test_evaluate_with_sort_scripts_calls_es_with_sort_clauses() -> None:
     assert body["sort"][-1] == {"_score": "desc"}
 
 
+class _ApiErrorLike(Exception):
+    """Mimics elasticsearch.ApiError: carries a ``body`` dict; ``str()`` collapses to a short reason."""
+
+    def __init__(self, body: dict[str, Any], short: str = "compile error") -> None:
+        super().__init__(short)
+        self.body = body
+        self._short = short
+
+    def __str__(self) -> str:
+        return self._short
+
+
+def _painless_error_body() -> dict[str, Any]:
+    return {
+        "error": {
+            "root_cause": [
+                {
+                    "type": "script_exception",
+                    "reason": "compile error",
+                    "caused_by": {
+                        "type": "class_cast_exception",
+                        "reason": "Cannot cast from [double[]] to [java.util.List].",
+                    },
+                }
+            ]
+        }
+    }
+
+
+def test_evaluate_surfaces_painless_detail_in_sample_error() -> None:
+    es = _FakeES({1.0: _ApiErrorLike(_painless_error_body())})
+    with pytest.raises(RuntimeError, match="all users failed"):
+        evaluate(
+            es,
+            ScriptSet(query_source="return 1.0;"),
+            {"u1": {"x"}},
+            {"u1": _user("u1", 1.0)},
+            k=10,
+            diversity_fields=("sector",),
+        )
+
+
+def test_evaluate_partial_failure_sample_error_includes_caused_by() -> None:
+    responses: dict[float, Any] = {
+        1.0: _hits([("item_pos", {"sector": "S"})]),
+        2.0: _ApiErrorLike(_painless_error_body()),
+    }
+    es = _FakeES(responses)
+    result = evaluate(
+        es,
+        ScriptSet(query_source="return 1.0;"),
+        {"user_ok": {"item_pos"}, "user_bad": {"item_pos"}},
+        {"user_ok": _user("user_ok", 1.0), "user_bad": _user("user_bad", 2.0)},
+        k=10,
+        diversity_fields=("sector",),
+    )
+    assert result.sample_error is not None
+    assert "Cannot cast from [double[]] to [java.util.List]." in result.sample_error
+
+
 def test_evaluate_counts_users_missing_from_users_by_id_as_failed() -> None:
     es = _FakeES({1.0: _hits([("y", {"sector": "S"})])})
     result = evaluate(
