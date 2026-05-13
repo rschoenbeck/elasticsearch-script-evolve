@@ -89,7 +89,7 @@ def filter_to_indexed_items(
     the contract of :func:`build_ground_truth`.
 
     Pure: no ES calls, no I/O. The caller is responsible for fetching
-    ``indexed_ids``.
+    ``indexed_item_ids``.
 
     Args:
         ground_truth: Per-user positive item sets to filter.

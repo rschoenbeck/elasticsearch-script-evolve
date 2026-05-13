@@ -58,7 +58,7 @@ class ToolContext:
             indexed item ids).
         users_by_id: Per-user vectors keyed by user id. Used by both the
             compile-check (first user) and the full eval pass.
-        indexed_ids: Item ids currently in the index. Reserved for future
+        indexed_item_ids: Item ids currently in the index. Reserved for future
             tool-level lookups; the runner already operates on
             ``ground_truth``.
         baseline_metrics: Metrics dict written by ``iter_000``. Disclosed
@@ -90,7 +90,7 @@ class ToolContext:
     run_log: RunLog
     ground_truth: dict[str, set[str]]
     users_by_id: dict[str, User]
-    indexed_ids: set[str]
+    indexed_item_ids: set[str]
     baseline_metrics: dict[str, float | None]
     objective: str = config.DEFAULT_OBJECTIVE
     max_iters: int = 20
