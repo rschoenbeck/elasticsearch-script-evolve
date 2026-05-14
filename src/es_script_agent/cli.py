@@ -7,16 +7,32 @@ import logging
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version
 from pathlib import Path
+from typing import Any
 
 from es_script_agent import config
-from es_script_agent.data import load_dataset
+from es_script_agent.agent.llm import make_llm
+from es_script_agent.agent.loop import run_loop
+from es_script_agent.agent.prompts import build_system_prompt
+from es_script_agent.agent.tools import ToolContext
+from es_script_agent.data import DatasetAdapter, load_dataset
+from es_script_agent.data.schema import User
 from es_script_agent.es.client import make_client
 from es_script_agent.es.index import fetch_indexed_item_ids, setup_indices
 from es_script_agent.es.query import DEFAULT_MAX_SORT_SCRIPTS
 from es_script_agent.es.schemas import LOANS_INDEX
-from es_script_agent.eval.interactions import build_ground_truth, filter_to_indexed_items
-from es_script_agent.eval.runner import ScriptSet, evaluate, load_script_set
-from es_script_agent.runlog import IterationRecord, RunLog, new_run_dir, snapshot_script_set
+from es_script_agent.eval.interactions import (
+    FilterStats,
+    build_ground_truth,
+    filter_to_indexed_items,
+)
+from es_script_agent.eval.runner import EvalResult, ScriptSet, evaluate, load_script_set
+from es_script_agent.runlog import (
+    IterationRecord,
+    RunLog,
+    check_guardrail,
+    new_run_dir,
+    snapshot_script_set,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +46,128 @@ def _positive_int(raw: str) -> int:
     if value < 1:
         raise argparse.ArgumentTypeError(f"must be >= 1, got {value}")
     return value
+
+
+def _setup_eval_cohort(
+    adapter: DatasetAdapter,
+    es: Any,
+) -> tuple[dict[str, set[str]], dict[str, User], FilterStats, set[str]]:
+    """Build the filtered ground truth + user lookup for an eval run.
+
+    Pulls raw interactions, fetches the current indexed item ids,
+    filters the ground truth to retrievable items, materialises the
+    per-user vector dict, and logs the drop-rate. Shared between
+    ``baseline_cmd`` and ``rl_loop_cmd``.
+
+    Returns:
+        ``(ground_truth, users_by_id, stats, indexed_ids)``.
+    """
+    raw_ground_truth = build_ground_truth(adapter.iter_interactions())
+    indexed_ids = fetch_indexed_item_ids(es, index=LOANS_INDEX)
+    ground_truth, stats = filter_to_indexed_items(raw_ground_truth, indexed_ids)
+    logger.info(
+        "ground-truth filter: kept %d/%d users, %d/%d positives (%.1f%% dropped)",
+        stats.users_after,
+        stats.users_before,
+        stats.positives_after,
+        stats.positives_before,
+        stats.positives_dropped_pct,
+    )
+    users_by_id = {u.id: u for u in adapter.iter_users() if u.id in ground_truth}
+    return ground_truth, users_by_id, stats, indexed_ids
+
+
+def _snapshot_and_eval_baseline(
+    es: Any,
+    run_dir: Path,
+    k: int,
+    ground_truth: dict[str, set[str]],
+    users_by_id: dict[str, User],
+) -> tuple[EvalResult, Path, list[Path], str]:
+    """Load ``scripts/baseline/``, snapshot it as iter_000, and evaluate.
+
+    Returns:
+        ``(result, query_path, sort_paths, started_at)``.
+    """
+    script_set = load_script_set(config.SCRIPTS_DIR / "baseline")
+    query_path, sort_paths = snapshot_script_set(run_dir, 0, script_set)
+    started_at = _utc_now_iso()
+    result = evaluate(
+        es,
+        script_set,
+        ground_truth,
+        users_by_id,
+        k=k,
+        diversity_fields=config.ILD_DIVERSITY_FIELDS,
+    )
+    return result, query_path, sort_paths, started_at
+
+
+def _make_iter_zero_record(
+    *,
+    result: EvalResult,
+    started_at: str,
+    query_path: Path,
+    sort_paths: list[Path],
+) -> IterationRecord:
+    return IterationRecord(
+        iter=0,
+        timestamp=started_at,
+        query_script_path=str(query_path),
+        sort_script_paths=[str(p) for p in sort_paths],
+        metrics=result.metrics,
+        eval_users=result.eval_users,
+        eval_seconds=result.eval_seconds,
+        llm_rationale=None,
+        parent_iter=None,
+        compile_error=None,
+        partial_failure=result.partial_failure,
+        sample_error=result.sample_error,
+    )
+
+
+def _ground_truth_filter_meta(stats: FilterStats) -> dict[str, float | int]:
+    return {
+        "users_before": stats.users_before,
+        "users_after": stats.users_after,
+        "positives_before": stats.positives_before,
+        "positives_after": stats.positives_after,
+        "positives_dropped_pct": stats.positives_dropped_pct,
+    }
+
+
+def _base_meta_header(
+    *,
+    dataset: str,
+    k: int,
+    objective: str,
+    cohort_size: int,
+    max_sort_scripts: int,
+    started_at: str,
+    baseline_metrics: dict[str, float | None],
+    stats: FilterStats,
+) -> dict[str, Any]:
+    """Build the keys ``meta.json`` carries on every run.
+
+    Shared between :func:`baseline_cmd` and :func:`rl_loop_cmd` so the
+    immutable header schema can't drift between commands. Callers
+    append run-mode-specific keys (e.g. provider/model_id on rl-loop)
+    after this returns.
+    """
+    return {
+        "dataset": dataset,
+        "relevance_threshold": config.RELEVANCE_THRESHOLD,
+        "k": k,
+        "cohort_size": cohort_size,
+        "seed": 0,
+        "max_sort_scripts": max_sort_scripts,
+        "harness_version": pkg_version("elasticsearch-agentic-script-sorting"),
+        "created_at": started_at,
+        "ild_diversity_fields": list(config.ILD_DIVERSITY_FIELDS),
+        "objective": objective,
+        "baseline_metrics": baseline_metrics,
+        "ground_truth_filter": _ground_truth_filter_meta(stats),
+    }
 
 
 def setup_indices_cmd() -> None:
@@ -72,70 +210,32 @@ def baseline_cmd() -> None:
     adapter = load_dataset(args.dataset)
     es = make_client()
 
-    raw_ground_truth = build_ground_truth(adapter.iter_interactions())
-    indexed_ids = fetch_indexed_item_ids(es, index=LOANS_INDEX)
-    ground_truth, stats = filter_to_indexed_items(raw_ground_truth, indexed_ids)
-    logger.info(
-        "ground-truth filter: kept %d/%d users, %d/%d positives (%.1f%% dropped)",
-        stats.users_after,
-        stats.users_before,
-        stats.positives_after,
-        stats.positives_before,
-        stats.positives_dropped_pct,
-    )
-    users_by_id = {u.id: u for u in adapter.iter_users() if u.id in ground_truth}
+    ground_truth, users_by_id, stats, _ = _setup_eval_cohort(adapter, es)
 
-    script_set = load_script_set(config.SCRIPTS_DIR / "baseline")
     run_dir = new_run_dir(config.RUNS_DIR)
-    query_path, sort_paths = snapshot_script_set(run_dir, 0, script_set)
-    started_at = _utc_now_iso()
-
-    result = evaluate(
-        es,
-        script_set,
-        ground_truth,
-        users_by_id,
-        k=args.k,
-        diversity_fields=config.ILD_DIVERSITY_FIELDS,
+    result, query_path, sort_paths, started_at = _snapshot_and_eval_baseline(
+        es, run_dir, args.k, ground_truth, users_by_id
     )
 
     log = RunLog(run_dir)
     log.write_header(
-        {
-            "dataset": args.dataset,
-            "relevance_threshold": config.RELEVANCE_THRESHOLD,
-            "k": args.k,
-            "cohort_size": len(ground_truth),
-            "seed": 0,
-            "max_sort_scripts": DEFAULT_MAX_SORT_SCRIPTS,
-            "harness_version": pkg_version("elasticsearch-agentic-script-sorting"),
-            "created_at": started_at,
-            "ild_diversity_fields": list(config.ILD_DIVERSITY_FIELDS),
-            "objective": args.objective,
-            "baseline_metrics": result.metrics,
-            "ground_truth_filter": {
-                "users_before": stats.users_before,
-                "users_after": stats.users_after,
-                "positives_before": stats.positives_before,
-                "positives_after": stats.positives_after,
-                "positives_dropped_pct": stats.positives_dropped_pct,
-            },
-        }
+        _base_meta_header(
+            dataset=args.dataset,
+            k=args.k,
+            objective=args.objective,
+            cohort_size=len(ground_truth),
+            max_sort_scripts=DEFAULT_MAX_SORT_SCRIPTS,
+            started_at=started_at,
+            baseline_metrics=result.metrics,
+            stats=stats,
+        )
     )
     log.append(
-        IterationRecord(
-            iter=0,
-            timestamp=started_at,
-            query_script_path=str(query_path),
-            sort_script_paths=[str(p) for p in sort_paths],
-            metrics=result.metrics,
-            eval_users=result.eval_users,
-            eval_seconds=result.eval_seconds,
-            llm_rationale=None,
-            parent_iter=None,
-            compile_error=None,
-            partial_failure=result.partial_failure,
-            sample_error=result.sample_error,
+        _make_iter_zero_record(
+            result=result,
+            started_at=started_at,
+            query_path=query_path,
+            sort_paths=sort_paths,
         )
     )
 
@@ -146,8 +246,167 @@ def baseline_cmd() -> None:
         print(f"{key}: {value!r}" if value is None else f"{key}: {value:.4f}")
 
 
+def _resolve_model_id(provider: str) -> str:
+    return config.ANTHROPIC_MODEL if provider == "anthropic" else config.OPENAI_MODEL
+
+
 def rl_loop_cmd() -> None:
-    raise NotImplementedError("rl-loop is not implemented yet (Task 16)")
+    """Run the agentic improvement loop end-to-end.
+
+    Builds a fresh run directory, runs the baseline as ``iter_000`` to
+    seed the guardrail thresholds, then hands control to a
+    ``create_agent`` instance backed by ``eval_scripts`` /
+    ``read_history``. The harness only enforces the outer iteration
+    budget (inside ``eval_scripts``) and writes the final agent
+    message back into ``meta.json`` once the loop terminates.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    parser = argparse.ArgumentParser(prog="rl-loop")
+    parser.add_argument("--iters", type=_positive_int, required=True)
+    parser.add_argument("--provider", default=None, choices=("anthropic", "openai"))
+    parser.add_argument("--dataset", default="default")
+    parser.add_argument(
+        "--max-sort-scripts",
+        type=_positive_int,
+        default=DEFAULT_MAX_SORT_SCRIPTS,
+        dest="max_sort_scripts",
+    )
+    parser.add_argument("--objective", default=config.DEFAULT_OBJECTIVE, choices=("ndcg", "ild"))
+    parser.add_argument("--k", type=_positive_int, default=10)
+    args = parser.parse_args()
+
+    provider = (args.provider or config.LLM_PROVIDER).lower()
+    model_id = _resolve_model_id(provider)
+
+    adapter = load_dataset(args.dataset)
+    es = make_client()
+
+    ground_truth, users_by_id, stats, indexed_ids = _setup_eval_cohort(adapter, es)
+    if not users_by_id:
+        raise SystemExit("error: filtered ground truth is empty; nothing to evaluate")
+
+    run_dir = new_run_dir(config.RUNS_DIR)
+    baseline_result, query_path, sort_paths, started_at = _snapshot_and_eval_baseline(
+        es, run_dir, args.k, ground_truth, users_by_id
+    )
+
+    log = RunLog(run_dir)
+    meta = _base_meta_header(
+        dataset=args.dataset,
+        k=args.k,
+        objective=args.objective,
+        cohort_size=len(ground_truth),
+        max_sort_scripts=args.max_sort_scripts,
+        started_at=started_at,
+        baseline_metrics=baseline_result.metrics,
+        stats=stats,
+    )
+    meta["provider"] = provider
+    meta["model_id"] = model_id
+    meta["max_iters"] = args.iters
+    log.write_header(meta)
+    log.append(
+        _make_iter_zero_record(
+            result=baseline_result,
+            started_at=started_at,
+            query_path=query_path,
+            sort_paths=sort_paths,
+        )
+    )
+
+    ctx = ToolContext(
+        es=es,
+        run_dir=run_dir,
+        run_log=log,
+        ground_truth=ground_truth,
+        users_by_id=users_by_id,
+        indexed_item_ids=indexed_ids,
+        baseline_metrics=baseline_result.metrics,
+        objective=args.objective,
+        max_iters=args.iters,
+        max_sort_scripts=args.max_sort_scripts,
+        k=args.k,
+        diversity_fields=config.ILD_DIVERSITY_FIELDS,
+        index=LOANS_INDEX,
+    )
+
+    system_prompt = build_system_prompt(
+        baseline_metrics=baseline_result.metrics,
+        objective=args.objective,
+        diversity_fields=config.ILD_DIVERSITY_FIELDS,
+        max_sort_scripts=args.max_sort_scripts,
+        reference_dir=config.SCRIPTS_DIR / "reference",
+        attribute_fields=adapter.attribute_field_types,
+        k=args.k,
+    )
+
+    llm = make_llm(provider)
+    primary_key = f"{args.objective}@{args.k}"
+    guardrail_key = f"{'ild' if args.objective == 'ndcg' else 'ndcg'}@{args.k}"
+
+    run_error: BaseException | None = None
+    try:
+        result = run_loop(ctx=ctx, llm=llm, system_prompt=system_prompt)
+        final_message = result.final_message
+        iters_attempted = result.iters_attempted
+    except BaseException as exc:  # noqa: BLE001 — we re-raise after persisting
+        run_error = exc
+        final_message = f"<run failed: {type(exc).__name__}: {exc}>"
+        iters_attempted = ctx.iter_counter - 1
+
+    summary = _build_summary(
+        records=log.read_all(),
+        baseline_metrics=baseline_result.metrics,
+        primary_key=primary_key,
+        guardrail_key=guardrail_key,
+        final_message=final_message,
+        iters_attempted=iters_attempted,
+    )
+    meta["summary"] = summary
+    log.write_header(meta)
+
+    print(f"run: {run_dir}")
+    print(f"iters_attempted: {iters_attempted}")
+    print(f"best_iter: {summary['best_iter']}")
+    if summary["best_primary"] is not None:
+        print(f"best {primary_key}: {summary['best_primary']:.4f}")
+    print(f"guardrail_held ({guardrail_key}): {summary['guardrail_held']}")
+
+    if run_error is not None:
+        raise run_error
+
+
+def _build_summary(
+    *,
+    records: list[IterationRecord],
+    baseline_metrics: dict[str, float | None],
+    primary_key: str,
+    guardrail_key: str,
+    final_message: str,
+    iters_attempted: int,
+) -> dict[str, object]:
+    """Compute the post-run summary block written into ``meta.json``.
+
+    Selects the best iteration by ``primary_key`` and reuses
+    :func:`runlog.check_guardrail` to decide whether its guardrail
+    metric held against the baseline — matching the same semantics the
+    agent's ``read_history`` tool exposes per record.
+    """
+    scored = [
+        r for r in records if r.metrics is not None and r.metrics.get(primary_key) is not None
+    ]
+    best = max(scored, key=lambda r: r.metrics[primary_key]) if scored else None
+    guardrail_held = (
+        check_guardrail(best.metrics, guardrail_key, baseline_metrics) if best else False
+    )
+    return {
+        "best_iter": best.iter if best else None,
+        "best_primary": best.metrics[primary_key] if best else None,
+        "guardrail_held": guardrail_held,
+        "iters_attempted": iters_attempted,
+        "final_message": final_message,
+    }
 
 
 def build_eval_parser() -> argparse.ArgumentParser:
@@ -236,18 +495,7 @@ def eval_cmd() -> None:
     adapter = load_dataset(args.dataset)
     es = make_client()
 
-    raw_ground_truth = build_ground_truth(adapter.iter_interactions())
-    indexed_ids = fetch_indexed_item_ids(es, index=LOANS_INDEX)
-    ground_truth, stats = filter_to_indexed_items(raw_ground_truth, indexed_ids)
-    logger.info(
-        "ground-truth filter: kept %d/%d users, %d/%d positives (%.1f%% dropped)",
-        stats.users_after,
-        stats.users_before,
-        stats.positives_after,
-        stats.positives_before,
-        stats.positives_dropped_pct,
-    )
-    users_by_id = {u.id: u for u in adapter.iter_users() if u.id in ground_truth}
+    ground_truth, users_by_id, _stats, _indexed_ids = _setup_eval_cohort(adapter, es)
 
     try:
         result = evaluate(
