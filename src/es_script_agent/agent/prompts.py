@@ -2,18 +2,14 @@
 
 The prompt is a single string parameterized on the run's primary
 objective and baseline metrics, the disclosed ILD diversity field set,
-the sort-script cap, and an optional inline catalogue of reference
-script sets. It is rendered once at CLI entry and passed verbatim to
-:func:`langchain.agents.create_agent`.
+and the sort-script cap. It is rendered once at CLI entry and passed
+verbatim to :func:`langchain.agents.create_agent`.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import Any
-
-from es_script_agent.eval.runner import load_script_set
 
 
 _BASE = """\
@@ -100,8 +96,7 @@ Reasoning guidance:
   and emit a corrected candidate.
 - Keep changes incremental — change one thing at a time so the
   metric movement is attributable.
-- Stop when you have produced a clear winner against the primary
-  metric while holding the guardrail.
+- Stop when you have exhausted the iteration budget.
 """
 
 
@@ -111,7 +106,6 @@ def build_system_prompt(
     objective: str,
     diversity_fields: Sequence[str],
     max_sort_scripts: int,
-    reference_dir: Path,
     attribute_fields: Mapping[str, Mapping[str, Any]],
     k: int = 10,
 ) -> str:
@@ -124,10 +118,6 @@ def build_system_prompt(
         diversity_fields: Field set used for ILD computation. Surfaced
             verbatim so the agent knows what counts as diversity.
         max_sort_scripts: Cap on sort-script count per iteration.
-        reference_dir: Path to ``scripts/reference/``. If the directory
-            exists and contains script-set subdirectories, each is
-            inlined as a labelled example. Missing or empty → no
-            example block.
         attribute_fields: Per-attribute ES field-type mapping (as
             produced by ``DatasetAdapter.attribute_field_types``). Used
             to render the list of ``doc[...]`` bindings so the prompt
@@ -152,7 +142,7 @@ def build_system_prompt(
         for name, defn in sorted(attribute_fields.items())
     )
 
-    body = _BASE.format(
+    return _BASE.format(
         max_sort_scripts=max_sort_scripts,
         diversity_fields=", ".join(diversity_fields),
         attribute_lines=attribute_lines,
@@ -166,32 +156,3 @@ def build_system_prompt(
         guardrail_key=guardrail_key,
         guardrail_value=_fmt(guardrail_key),
     )
-
-    examples = _render_reference_examples(reference_dir)
-    if examples:
-        body = body + "\n\nReference script sets (human-authored, for inspiration):\n\n" + examples
-    return body
-
-
-def _render_reference_examples(reference_dir: Path) -> str:
-    """Inline each subdirectory of ``reference_dir`` as a labelled block."""
-    if not reference_dir.is_dir():
-        return ""
-    blocks: list[str] = []
-    for subdir in sorted(p for p in reference_dir.iterdir() if p.is_dir()):
-        try:
-            script_set = load_script_set(subdir)
-        except FileNotFoundError:
-            continue
-        parts = [f"### {subdir.name}", "", "query.painless:", "```", script_set.query_source, "```"]
-        for i, source in enumerate(script_set.sort_sources):
-            parts.append(f"sort_{i:02d}.painless:")
-            parts.append("```")
-            parts.append(source)
-            parts.append("```")
-        description = subdir / "description.md"
-        if description.is_file():
-            parts.append("")
-            parts.append(description.read_text().strip())
-        blocks.append("\n".join(parts))
-    return "\n\n".join(blocks)

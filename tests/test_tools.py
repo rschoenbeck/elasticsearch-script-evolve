@@ -547,7 +547,6 @@ def test_build_system_prompt_includes_contract_fragments() -> None:
         objective="ndcg",
         diversity_fields=("sector", "country", "partnerId"),
         max_sort_scripts=5,
-        reference_dir=Path("/does/not/exist"),
         attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
     )
     assert "user_vector" in prompt
@@ -575,7 +574,6 @@ def test_build_system_prompt_renders_attribute_fields_with_types() -> None:
         objective="ndcg",
         diversity_fields=("sector",),
         max_sort_scripts=5,
-        reference_dir=Path("/does/not/exist"),
         attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
     )
     assert "doc['loanAmount']" in prompt and "double" in prompt
@@ -592,7 +590,6 @@ def test_build_system_prompt_does_not_leak_hardcoded_field_names() -> None:
         objective="ndcg",
         diversity_fields=("sector",),
         max_sort_scripts=5,
-        reference_dir=Path("/does/not/exist"),
         attribute_fields={"sector": {"type": "keyword"}},
     )
     # Stale names from earlier hardcoded list — must not appear unless passed in.
@@ -608,7 +605,6 @@ def test_build_system_prompt_objective_flips_primary_and_guardrail() -> None:
         objective="ndcg",
         diversity_fields=("sector",),
         max_sort_scripts=5,
-        reference_dir=Path("/does/not/exist"),
         attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
     )
     ild_prompt = build_system_prompt(
@@ -616,49 +612,10 @@ def test_build_system_prompt_objective_flips_primary_and_guardrail() -> None:
         objective="ild",
         diversity_fields=("sector",),
         max_sort_scripts=5,
-        reference_dir=Path("/does/not/exist"),
         attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
     )
     # Same metrics, flipped framing → outputs differ.
     assert ndcg_prompt != ild_prompt
-
-
-def test_build_system_prompt_inlines_reference_script_sets(tmp_path: Path) -> None:
-    from es_script_agent.agent.prompts import build_system_prompt
-
-    ref_dir = tmp_path / "reference"
-    set_dir = ref_dir / "popularity-boost"
-    set_dir.mkdir(parents=True)
-    (set_dir / "query.painless").write_text("RETURN_Q_POPULARITY;")
-    (set_dir / "sort_00.painless").write_text("RETURN_S_POPULARITY;")
-
-    prompt = build_system_prompt(
-        baseline_metrics={"ndcg@10": 0.30, "recall@10": 0.20, "precision@10": 0.10, "ild@10": 0.40},
-        objective="ndcg",
-        diversity_fields=("sector",),
-        max_sort_scripts=5,
-        reference_dir=ref_dir,
-        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
-    )
-    assert "popularity-boost" in prompt
-    assert "RETURN_Q_POPULARITY;" in prompt
-    assert "RETURN_S_POPULARITY;" in prompt
-
-
-def test_build_system_prompt_skips_reference_block_when_dir_empty(tmp_path: Path) -> None:
-    """Empty or missing reference dir → prompt builds fine, omits the block."""
-    from es_script_agent.agent.prompts import build_system_prompt
-
-    out_missing = build_system_prompt(
-        baseline_metrics={"ndcg@10": 0.30, "recall@10": 0.20, "precision@10": 0.10, "ild@10": 0.40},
-        objective="ndcg",
-        diversity_fields=("sector",),
-        max_sort_scripts=5,
-        reference_dir=tmp_path / "missing",
-        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
-    )
-    # No exception; output is non-empty.
-    assert out_missing.strip()
 
 
 # --- ToolContext sanity -------------------------------------------------

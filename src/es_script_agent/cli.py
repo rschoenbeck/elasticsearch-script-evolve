@@ -83,13 +83,14 @@ def _snapshot_and_eval_baseline(
     k: int,
     ground_truth: dict[str, set[str]],
     users_by_id: dict[str, User],
+    baseline_dir: Path,
 ) -> tuple[EvalResult, Path, list[Path], str]:
-    """Load ``scripts/baseline/``, snapshot it as iter_000, and evaluate.
+    """Load ``baseline_dir``, snapshot it as iter_000, and evaluate.
 
     Returns:
         ``(result, query_path, sort_paths, started_at)``.
     """
-    script_set = load_script_set(config.SCRIPTS_DIR / "baseline")
+    script_set = load_script_set(baseline_dir)
     query_path, sort_paths = snapshot_script_set(run_dir, 0, script_set)
     started_at = _utc_now_iso()
     result = evaluate(
@@ -205,6 +206,12 @@ def baseline_cmd() -> None:
     parser.add_argument("--dataset", default="default")
     parser.add_argument("--objective", default=config.DEFAULT_OBJECTIVE, choices=("ndcg", "ild"))
     parser.add_argument("--k", type=_positive_int, default=10)
+    parser.add_argument(
+        "--baseline-dir",
+        default=None,
+        dest="baseline_dir",
+        help="Directory containing query.painless + sort_NN.painless (default: scripts/baseline/).",
+    )
     args = parser.parse_args()
 
     adapter = load_dataset(args.dataset)
@@ -212,9 +219,10 @@ def baseline_cmd() -> None:
 
     ground_truth, users_by_id, stats, _ = _setup_eval_cohort(adapter, es)
 
+    baseline_dir = Path(args.baseline_dir) if args.baseline_dir else config.SCRIPTS_DIR / "baseline"
     run_dir = new_run_dir(config.RUNS_DIR)
     result, query_path, sort_paths, started_at = _snapshot_and_eval_baseline(
-        es, run_dir, args.k, ground_truth, users_by_id
+        es, run_dir, args.k, ground_truth, users_by_id, baseline_dir
     )
 
     log = RunLog(run_dir)
@@ -274,6 +282,12 @@ def rl_loop_cmd() -> None:
     )
     parser.add_argument("--objective", default=config.DEFAULT_OBJECTIVE, choices=("ndcg", "ild"))
     parser.add_argument("--k", type=_positive_int, default=10)
+    parser.add_argument(
+        "--baseline-dir",
+        default=None,
+        dest="baseline_dir",
+        help="Directory containing query.painless + sort_NN.painless (default: scripts/baseline/).",
+    )
     args = parser.parse_args()
 
     provider = (args.provider or config.LLM_PROVIDER).lower()
@@ -286,9 +300,10 @@ def rl_loop_cmd() -> None:
     if not users_by_id:
         raise SystemExit("error: filtered ground truth is empty; nothing to evaluate")
 
+    baseline_dir = Path(args.baseline_dir) if args.baseline_dir else config.SCRIPTS_DIR / "baseline"
     run_dir = new_run_dir(config.RUNS_DIR)
     baseline_result, query_path, sort_paths, started_at = _snapshot_and_eval_baseline(
-        es, run_dir, args.k, ground_truth, users_by_id
+        es, run_dir, args.k, ground_truth, users_by_id, baseline_dir
     )
 
     log = RunLog(run_dir)
@@ -336,7 +351,6 @@ def rl_loop_cmd() -> None:
         objective=args.objective,
         diversity_fields=config.ILD_DIVERSITY_FIELDS,
         max_sort_scripts=args.max_sort_scripts,
-        reference_dir=config.SCRIPTS_DIR / "reference",
         attribute_fields=adapter.attribute_field_types,
         k=args.k,
     )

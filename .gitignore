@@ -237,3 +237,4 @@ runs/
 # The generic baseline at scripts/baseline/ is tracked as the reference
 # implementation of the script-set directory contract.
 scripts/reference/
+scripts/baseline/baseline-private/

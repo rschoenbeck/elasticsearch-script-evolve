@@ -80,7 +80,7 @@ def stubbed_rl_loop_env(
     monkeypatch.setattr(cli, "make_client", lambda url=None: _FakeClient())
     monkeypatch.setattr(cli, "fetch_indexed_item_ids", lambda es, index: {"l1", "l2"})
 
-    # The system prompt builder reads ``scripts/reference/`` — make it a no-op.
+    # Stub out prompt construction — tests here exercise the loop wiring, not the prompt text.
     monkeypatch.setattr(cli, "build_system_prompt", lambda **kwargs: "sys")
 
     # Default fake LLM stops immediately. Individual tests override this
