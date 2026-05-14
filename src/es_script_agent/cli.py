@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import argparse
 import logging
+import random
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Any
 
 from es_script_agent import config
+from es_script_agent.agent.lineage import assert_baseline_eligible
 from es_script_agent.agent.llm import make_llm
-from es_script_agent.agent.loop import run_loop
+from es_script_agent.agent.loop import build_initial_message, run_loop
 from es_script_agent.agent.prompts import build_system_prompt
 from es_script_agent.agent.tools import ToolContext
 from es_script_agent.data import DatasetAdapter, load_dataset
@@ -283,15 +285,37 @@ def rl_loop_cmd() -> None:
     parser.add_argument("--objective", default=config.DEFAULT_OBJECTIVE, choices=("ndcg", "ild"))
     parser.add_argument("--k", type=_positive_int, default=10)
     parser.add_argument(
+        "--lineage",
+        default="linear",
+        choices=("linear", "evolutionary"),
+        help=(
+            "Parent-selection strategy. 'linear' (default) descends each iter from the "
+            "previous successful one. 'evolutionary' samples from the archive proportional "
+            "to fitness × 1/(1+children)."
+        ),
+    )
+    parser.add_argument(
         "--baseline-dir",
         default=None,
         dest="baseline_dir",
         help="Directory containing query.painless + sort_NN.painless (default: scripts/baseline/).",
     )
+    parser.add_argument(
+        "--hint",
+        default=None,
+        help=(
+            "Optional free-text hint inlined into the agent's kick-off message as "
+            "'Hint: <content>'. Use to pass insights from prior runs."
+        ),
+    )
     args = parser.parse_args()
 
     provider = (args.provider or config.LLM_PROVIDER).lower()
     model_id = _resolve_model_id(provider)
+    lineage_seed = random.randrange(2**32)
+    rng = random.Random(lineage_seed)
+    primary_key = f"{args.objective}@{args.k}"
+    guardrail_key = f"{'ild' if args.objective == 'ndcg' else 'ndcg'}@{args.k}"
 
     adapter = load_dataset(args.dataset)
     es = make_client()
@@ -320,6 +344,9 @@ def rl_loop_cmd() -> None:
     meta["provider"] = provider
     meta["model_id"] = model_id
     meta["max_iters"] = args.iters
+    meta["lineage"] = args.lineage
+    meta["lineage_seed"] = lineage_seed
+    meta["hint"] = args.hint
     log.write_header(meta)
     log.append(
         _make_iter_zero_record(
@@ -329,6 +356,12 @@ def rl_loop_cmd() -> None:
             sort_paths=sort_paths,
         )
     )
+
+    if args.lineage == "evolutionary":
+        try:
+            assert_baseline_eligible(log.read_all(), baseline_result.metrics, guardrail_key)
+        except ValueError as exc:
+            raise SystemExit(f"error: {exc}") from exc
 
     ctx = ToolContext(
         es=es,
@@ -344,6 +377,8 @@ def rl_loop_cmd() -> None:
         k=args.k,
         diversity_fields=config.ILD_DIVERSITY_FIELDS,
         index=LOANS_INDEX,
+        lineage=args.lineage,
+        rng=rng,
     )
 
     system_prompt = build_system_prompt(
@@ -352,16 +387,21 @@ def rl_loop_cmd() -> None:
         diversity_fields=config.ILD_DIVERSITY_FIELDS,
         max_sort_scripts=args.max_sort_scripts,
         attribute_fields=adapter.attribute_field_types,
+        max_iters=args.iters,
         k=args.k,
     )
+    initial_user_message = build_initial_message(load_script_set(baseline_dir), hint=args.hint)
 
     llm = make_llm(provider)
-    primary_key = f"{args.objective}@{args.k}"
-    guardrail_key = f"{'ild' if args.objective == 'ndcg' else 'ndcg'}@{args.k}"
 
     run_error: BaseException | None = None
     try:
-        result = run_loop(ctx=ctx, llm=llm, system_prompt=system_prompt)
+        result = run_loop(
+            ctx=ctx,
+            llm=llm,
+            system_prompt=system_prompt,
+            initial_user_message=initial_user_message,
+        )
         final_message = result.final_message
         iters_attempted = result.iters_attempted
     except BaseException as exc:  # noqa: BLE001 — we re-raise after persisting

@@ -307,3 +307,67 @@ def test_rl_loop_max_sort_scripts_flag_recorded(
     run_dir = next(stubbed_rl_loop_env["runs_dir"].iterdir())
     meta = json.loads((run_dir / "meta.json").read_text())
     assert meta["max_sort_scripts"] == 2
+
+
+# --- evolutionary lineage flag -----------------------------------------
+
+
+def test_rl_loop_default_lineage_is_linear_and_seed_is_recorded(
+    stubbed_rl_loop_env: dict[str, Any],
+) -> None:
+    """A no-flag invocation still writes ``lineage`` + ``lineage_seed``."""
+    cli.rl_loop_cmd()
+    run_dir = next(stubbed_rl_loop_env["runs_dir"].iterdir())
+    meta = json.loads((run_dir / "meta.json").read_text())
+    assert meta["lineage"] == "linear"
+    assert isinstance(meta["lineage_seed"], int)
+
+
+def test_rl_loop_evolutionary_flag_records_lineage_and_seed(
+    monkeypatch: pytest.MonkeyPatch,
+    stubbed_rl_loop_env: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(
+        "sys.argv", ["rl-loop", "--iters", "3", "--lineage", "evolutionary"]
+    )
+    cli.rl_loop_cmd()
+    run_dir = next(stubbed_rl_loop_env["runs_dir"].iterdir())
+    meta = json.loads((run_dir / "meta.json").read_text())
+    assert meta["lineage"] == "evolutionary"
+    assert isinstance(meta["lineage_seed"], int)
+
+
+def test_rl_loop_rejects_unknown_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+    stubbed_rl_loop_env: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(
+        "sys.argv", ["rl-loop", "--iters", "3", "--lineage", "bogus"]
+    )
+    with pytest.raises(SystemExit):
+        cli.rl_loop_cmd()
+
+
+def test_rl_loop_linear_parent_sequence_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    stubbed_rl_loop_env: dict[str, Any],
+) -> None:
+    """Default no-flag run produces the linear ``parent_iter`` sequence."""
+    monkeypatch.setattr(
+        cli,
+        "make_llm",
+        lambda provider=None: _ToolCallingFakeLLM(
+            responses=[
+                AIMessage(content="", tool_calls=[_eval_call("return 2.0;", tid="a")]),
+                AIMessage(content="", tool_calls=[_eval_call("return 3.0;", tid="b")]),
+                AIMessage(content="", tool_calls=[_eval_call("return 4.0;", tid="c")]),
+                AIMessage(content="done"),
+            ]
+        ),
+    )
+    cli.rl_loop_cmd()
+    run_dir = next(stubbed_rl_loop_env["runs_dir"].iterdir())
+    records = [json.loads(line) for line in (run_dir / "run.jsonl").read_text().splitlines()]
+    # iter_0 baseline (no parent), iter_1 ⇐ 0, iter_2 ⇐ 1, iter_3 ⇐ 2.
+    parents = [r["parent_iter"] for r in records]
+    assert parents == [None, 0, 1, 2]

@@ -18,17 +18,63 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
 from es_script_agent.agent.tools import ToolContext, make_tools
+from es_script_agent.eval.runner import ScriptSet
 
 logger = logging.getLogger(__name__)
 
 
 _DEFAULT_INITIAL_MESSAGE = (
-    "Begin improving the scoring scripts. Read the system prompt for the run "
-    "objective and baseline metrics, then propose your first candidate via "
-    "the eval_scripts tool. Stop when you have produced a clear winner "
-    "against the primary metric while holding the guardrail, or when the "
-    "iteration budget is exhausted."
+    "Begin improving the scoring scripts. Use the eval_scripts tool to "
+    "advance one iteration; continue until eval_scripts returns "
+    "budget_exhausted. Do not stop on a perceived plateau."
 )
+
+
+def build_initial_message(baseline: ScriptSet, hint: str | None = None) -> str:
+    """Render the kick-off user message with baseline Painless inlined.
+
+    The baseline source lives in the conversation history exactly once
+    — every later turn re-reads the same message rather than each
+    iteration carrying its own copy. ``read_history`` is reserved for
+    revisiting the agent's own prior iterations.
+
+    Args:
+        baseline: The iter_0 script set whose Painless source is
+            inlined into the message.
+        hint: Optional operator note rendered as ``Hint: <content>``
+            between the intro and the baseline blocks. ``None`` and
+            whitespace-only strings are both treated as absent and
+            yield the unchanged message.
+    """
+    blocks = [
+        "Begin improving the scoring scripts. The baseline (iter_0) Painless "
+        "source is inlined below — it produced the baseline metrics in your "
+        "system prompt. Treat it as the starting point you will diverge from.",
+    ]
+    if hint is not None and hint.strip():
+        blocks += ["", f"Hint: {hint.strip()}"]
+    blocks += [
+        "",
+        "## Baseline query.painless",
+        "```painless",
+        baseline.query_source.rstrip(),
+        "```",
+    ]
+    for i, sort_source in enumerate(baseline.sort_sources):
+        blocks += [
+            "",
+            f"## Baseline sort_{i:02d}.painless",
+            "```painless",
+            sort_source.rstrip(),
+            "```",
+        ]
+    blocks += [
+        "",
+        "Call eval_scripts to advance one iteration. Continue until "
+        "eval_scripts returns budget_exhausted; do not stop on a perceived "
+        "plateau.",
+    ]
+    return "\n".join(blocks)
 
 
 @dataclass(frozen=True)

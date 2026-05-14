@@ -548,6 +548,7 @@ def test_build_system_prompt_includes_contract_fragments() -> None:
         diversity_fields=("sector", "country", "partnerId"),
         max_sort_scripts=5,
         attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=30,
     )
     assert "user_vector" in prompt
     assert "item_vector" in prompt
@@ -575,6 +576,7 @@ def test_build_system_prompt_renders_attribute_fields_with_types() -> None:
         diversity_fields=("sector",),
         max_sort_scripts=5,
         attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=30,
     )
     assert "doc['loanAmount']" in prompt and "double" in prompt
     assert "doc['popularityScore']" in prompt and "integer" in prompt
@@ -591,10 +593,68 @@ def test_build_system_prompt_does_not_leak_hardcoded_field_names() -> None:
         diversity_fields=("sector",),
         max_sort_scripts=5,
         attribute_fields={"sector": {"type": "keyword"}},
+        max_iters=30,
     )
     # Stale names from earlier hardcoded list — must not appear unless passed in.
     for stale in ("activityId", "researchScore", "partnerRiskRating"):
         assert stale not in prompt, f"prompt still references stale field {stale!r}"
+
+
+def test_build_system_prompt_read_history_blurb_notes_baseline_already_inline() -> None:
+    """The system prompt should tell the agent the baseline source is in
+    the initial user message, so it doesn't waste a tool call asking for
+    iter_0 sources via read_history."""
+    from es_script_agent.agent.prompts import build_system_prompt
+
+    prompt = build_system_prompt(
+        baseline_metrics={"ndcg@10": 0.30, "recall@10": 0.20, "precision@10": 0.10, "ild@10": 0.40},
+        objective="ndcg",
+        diversity_fields=("sector",),
+        max_sort_scripts=5,
+        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=30,
+    )
+    # Some phrasing that points at the initial message — the exact words
+    # are not load-bearing, but the agent must know it has the source.
+    assert "initial" in prompt.lower() or "first message" in prompt.lower() or "user message" in prompt.lower()
+
+
+def test_build_system_prompt_discloses_iteration_budget() -> None:
+    """The prompt should name the iteration budget so the agent paces itself."""
+    from es_script_agent.agent.prompts import build_system_prompt
+
+    prompt = build_system_prompt(
+        baseline_metrics={"ndcg@10": 0.30, "recall@10": 0.20, "precision@10": 0.10, "ild@10": 0.40},
+        objective="ndcg",
+        diversity_fields=("sector",),
+        max_sort_scripts=5,
+        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=42,
+    )
+    # The exact number is disclosed.
+    assert "42" in prompt
+    # The remaining-iters field name is documented so the agent knows
+    # what to watch for in tool responses.
+    assert "iters_remaining" in prompt
+
+
+def test_build_system_prompt_anti_early_stop_language() -> None:
+    """The termination paragraph must counter the model's natural wrap-up habit."""
+    from es_script_agent.agent.prompts import build_system_prompt
+
+    prompt = build_system_prompt(
+        baseline_metrics={"ndcg@10": 0.30, "recall@10": 0.20, "precision@10": 0.10, "ild@10": 0.40},
+        objective="ndcg",
+        diversity_fields=("sector",),
+        max_sort_scripts=5,
+        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=30,
+    )
+    # The plateau-not-stop rule is named explicitly.
+    assert "budget_exhausted" in prompt
+    assert "plateau" in prompt.lower()
+    # The "summary is not graded" anchor counters cleanup-and-conclude.
+    assert "not graded" in prompt.lower()
 
 
 def test_build_system_prompt_objective_flips_primary_and_guardrail() -> None:
@@ -606,6 +666,7 @@ def test_build_system_prompt_objective_flips_primary_and_guardrail() -> None:
         diversity_fields=("sector",),
         max_sort_scripts=5,
         attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=30,
     )
     ild_prompt = build_system_prompt(
         baseline_metrics={"ndcg@10": 0.30, "recall@10": 0.20, "precision@10": 0.10, "ild@10": 0.40},
@@ -613,6 +674,7 @@ def test_build_system_prompt_objective_flips_primary_and_guardrail() -> None:
         diversity_fields=("sector",),
         max_sort_scripts=5,
         attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=30,
     )
     # Same metrics, flipped framing → outputs differ.
     assert ndcg_prompt != ild_prompt
@@ -627,3 +689,195 @@ def test_tool_context_persists_run_meta(tmp_path: Path) -> None:
     _run_a_few(ctx, n=1)
     meta = json.loads((ctx.run_dir / "meta.json").read_text())
     assert meta["k"] == 10
+
+
+# --- evolutionary lineage wiring ---------------------------------------
+
+
+def test_tool_context_evolutionary_without_rng_raises(tmp_path: Path) -> None:
+    """An ``"evolutionary"`` context without an RNG is a wiring bug."""
+    import random
+
+    run_dir = tmp_path / "run_x"
+    run_dir.mkdir()
+    log = RunLog(run_dir)
+    log.write_header({})
+    with pytest.raises(ValueError, match="rng"):
+        ToolContext(
+            es=_FakeES(),
+            run_dir=run_dir,
+            run_log=log,
+            ground_truth={"u1": {"x"}},
+            users_by_id={"u1": _user("u1", 1.0)},
+            indexed_item_ids={"x"},
+            baseline_metrics=_baseline_metrics(),
+            lineage="evolutionary",
+            rng=None,
+        )
+    # Sanity: passing the RNG works.
+    ToolContext(
+        es=_FakeES(),
+        run_dir=run_dir,
+        run_log=log,
+        ground_truth={"u1": {"x"}},
+        users_by_id={"u1": _user("u1", 1.0)},
+        indexed_item_ids={"x"},
+        baseline_metrics=_baseline_metrics(),
+        lineage="evolutionary",
+        rng=random.Random(0),
+    )
+
+
+def test_eval_scripts_evolutionary_parent_matches_pure_function(tmp_path: Path) -> None:
+    """``--lineage evolutionary`` routes parent selection through the lineage module."""
+    import random
+
+    from es_script_agent.agent.lineage import select_parent_evolutionary
+
+    ctx = ToolContext(
+        es=_FakeES(),
+        run_dir=tmp_path / "run_x",
+        run_log=RunLog(tmp_path / "run_x"),
+        ground_truth={"u1": {"item_pos"}},
+        users_by_id={"u1": _user("u1", 1.0)},
+        indexed_item_ids={"item_pos"},
+        baseline_metrics=_baseline_metrics(),
+        objective="ndcg",
+        max_iters=5,
+        max_sort_scripts=DEFAULT_MAX_SORT_SCRIPTS,
+        k=10,
+        diversity_fields=("sector", "country"),
+        lineage="evolutionary",
+        rng=random.Random(123),
+    )
+    ctx.run_dir.mkdir()
+    ctx.run_log.write_header({"k": 10, "objective": "ndcg"})
+    # Seed iter_000 + iter_001 + iter_002 with diverse parent_iter / fitness so the
+    # offspring penalty has something to bite on.
+    from es_script_agent.runlog import IterationRecord
+
+    for iter_n, parent, primary in [(0, None, 0.30), (1, 0, 0.50), (2, 0, 0.45)]:
+        snapshot_dir = ctx.run_dir / f"iter_{iter_n:03d}"
+        snapshot_dir.mkdir()
+        (snapshot_dir / "query.painless").write_text(f"return {iter_n};")
+        ctx.run_log.append(
+            IterationRecord(
+                iter=iter_n,
+                timestamp="2026-01-01T00:00:00Z",
+                query_script_path=str(snapshot_dir / "query.painless"),
+                sort_script_paths=[],
+                metrics={
+                    "ndcg@10": primary,
+                    "recall@10": 0.2,
+                    "precision@10": 0.1,
+                    "ild@10": 0.5,
+                },
+                eval_users=1,
+                eval_seconds=0.0,
+                llm_rationale=None,
+                parent_iter=parent,
+                compile_error=None,
+                partial_failure=False,
+                sample_error=None,
+            )
+        )
+    ctx.iter_counter = 3
+    ctx.last_success_iter = 2
+
+    # Predict the lineage pick using an RNG seeded identically to ctx.rng's state.
+    # Trick: snapshot the rng state, branch a clone, predict, then restore.
+    rng_state = ctx.rng.getstate()  # type: ignore[union-attr]
+    expected_parent = select_parent_evolutionary(
+        ctx.run_log.read_all(),
+        ctx.baseline_metrics,
+        "ndcg@10",
+        "ild@10",
+        ctx.rng,  # type: ignore[arg-type]
+    )
+    ctx.rng.setstate(rng_state)  # type: ignore[union-attr]
+
+    tools = _tools_by_name(make_tools(ctx))
+    _invoke(tools["eval_scripts"], query_source="return 9.0;", sort_sources=[], rationale="r")
+    recorded_parent = ctx.run_log.read_all()[-1].parent_iter
+    assert recorded_parent == expected_parent
+    # Confirms the evolutionary branch is actually consulted: the seed +
+    # records were chosen so the lineage pick diverges from the linear
+    # fallback (`last_success_iter == 2`).
+    assert recorded_parent != 2
+
+
+def test_eval_scripts_linear_default_uses_last_success(tmp_path: Path) -> None:
+    """The default (``lineage="linear"``) keeps the existing fallback."""
+    ctx = _make_ctx(tmp_path)
+    assert ctx.lineage == "linear"
+    tools = _tools_by_name(make_tools(ctx))
+    _invoke(tools["eval_scripts"], query_source="Q1", sort_sources=[], rationale="r")
+    _invoke(tools["eval_scripts"], query_source="Q2", sort_sources=[], rationale="r")
+    records = ctx.run_log.read_all()
+    # Same expectation as the existing linear-path test:
+    # iter_001 ⇐ baseline, iter_002 ⇐ iter_001.
+    assert records[1].parent_iter == 0
+    assert records[2].parent_iter == 1
+
+
+def test_eval_scripts_response_carries_iters_remaining(tmp_path: Path) -> None:
+    """Successful and failed eval_scripts responses both report budget left."""
+    ctx = _make_ctx(tmp_path, max_iters=3)
+    tools = _tools_by_name(make_tools(ctx))
+
+    r1 = _invoke(tools["eval_scripts"], query_source="Q1", sort_sources=[], rationale="r")
+    r2 = _invoke(tools["eval_scripts"], query_source="Q2", sort_sources=[], rationale="r")
+    r3 = _invoke(tools["eval_scripts"], query_source="Q3", sort_sources=[], rationale="r")
+
+    # After call N (N successful), iters_remaining = max_iters - N.
+    assert r1["iters_remaining"] == 2
+    assert r2["iters_remaining"] == 1
+    assert r3["iters_remaining"] == 0
+
+
+def test_eval_scripts_budget_exhausted_reports_iters_remaining_zero(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path, max_iters=1)
+    tools = _tools_by_name(make_tools(ctx))
+    _invoke(tools["eval_scripts"], query_source="Q1", sort_sources=[], rationale="r")
+    r2 = _invoke(tools["eval_scripts"], query_source="Q2", sort_sources=[], rationale="r")
+    assert r2.get("budget_exhausted") is True
+    assert r2["iters_remaining"] == 0
+
+
+def test_eval_scripts_compile_failure_reports_iters_remaining(tmp_path: Path) -> None:
+    """Failed iterations also consume budget; the response must say so."""
+    es = _FakeES(compile_response=RuntimeError("nope"))
+    ctx = _make_ctx(tmp_path, es=es, max_iters=3)
+    tools = _tools_by_name(make_tools(ctx))
+    r1 = _invoke(tools["eval_scripts"], query_source="bad", sort_sources=[], rationale="r")
+    assert r1["ok"] is False
+    assert r1["iters_remaining"] == 2
+
+
+def test_read_history_response_carries_iters_remaining(tmp_path: Path) -> None:
+    """``read_history`` reports the budget too so the agent can re-anchor cheaply."""
+    ctx = _make_ctx(tmp_path, max_iters=5)
+    tools = _tools_by_name(make_tools(ctx))
+    _invoke(tools["eval_scripts"], query_source="Q1", sort_sources=[], rationale="r")
+    out = _invoke(tools["read_history"], last_n=5)
+    assert out["iters_remaining"] == 4
+    assert out["max_iters"] == 5
+
+
+def test_eval_scripts_explicit_parent_iter_wins_under_evolutionary(tmp_path: Path) -> None:
+    """An agent-supplied ``parent_iter`` must not be overridden by lineage selection."""
+    import random
+
+    ctx = _make_ctx(tmp_path)
+    # Convert the linear ctx into an evolutionary one without rebuilding the run dir.
+    ctx.lineage = "evolutionary"
+    ctx.rng = random.Random(0)
+    tools = _tools_by_name(make_tools(ctx))
+    _invoke(
+        tools["eval_scripts"],
+        query_source="Q",
+        sort_sources=[],
+        rationale="r",
+        parent_iter=42,
+    )
+    assert ctx.run_log.read_all()[-1].parent_iter == 42

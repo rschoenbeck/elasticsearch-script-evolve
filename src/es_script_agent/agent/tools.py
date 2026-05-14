@@ -23,6 +23,7 @@ when it is over the cap and terminates naturally.
 from __future__ import annotations
 
 import logging
+import random
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from es_script_agent import config
+from es_script_agent.agent.lineage import select_parent_evolutionary
 from es_script_agent.data.schema import User
 from es_script_agent.es.client import format_es_error
 from es_script_agent.es.query import DEFAULT_MAX_SORT_SCRIPTS, build_query
@@ -89,6 +91,15 @@ class ToolContext:
             ``parent_iter`` when the agent omits it. Defaults to ``0``
             (the baseline) so the first agent iteration descends from
             it, and is only overwritten by successful agent iterations.
+        lineage: ``"linear"`` (default) preserves the historical
+            ``last_success_iter`` fallback. ``"evolutionary"`` routes
+            the default-parent decision through
+            :func:`select_parent_evolutionary`. An explicit
+            ``parent_iter`` from the agent always wins under either
+            strategy.
+        rng: Seeded ``random.Random`` constructed once at CLI entry.
+            Required under ``lineage="evolutionary"``; unused under
+            ``"linear"``.
     """
 
     es: Any
@@ -106,6 +117,11 @@ class ToolContext:
     index: str = LOANS_INDEX
     iter_counter: int = 1
     last_success_iter: int | None = 0
+    lineage: str = "linear"
+    rng: random.Random | None = None
+    # Resolved once at construction; both tools need them on every call.
+    primary_key: str = field(init=False, default="")
+    guardrail_key: str = field(init=False, default="")
     # Pinned at construction so every compile-check uses the same user vector
     # and we don't re-sort the user dict on every tool call. Internal; not
     # exposed as a constructor arg.
@@ -121,6 +137,11 @@ class ToolContext:
             raise ValueError(
                 f"max_sort_scripts must be non-negative; got {self.max_sort_scripts}"
             )
+        if self.lineage == "evolutionary" and self.rng is None:
+            raise ValueError(
+                "lineage='evolutionary' requires an rng; pass a seeded random.Random"
+            )
+        self.primary_key, self.guardrail_key = _metric_keys(self.objective, self.k)
         self._compile_check_user_id = min(self.users_by_id)
 
 
@@ -212,6 +233,38 @@ def _make_failure_record(
     )
 
 
+def _iters_remaining(ctx: ToolContext) -> int:
+    """Count of ``eval_scripts`` calls still permitted after the current one.
+
+    Reported in every tool response so the agent can pace itself
+    without re-asking. ``ctx.iter_counter`` is the *next* slot to
+    assign, so the formula uses ``+ 1`` to include the current call
+    when it has not been incremented yet.
+    """
+    return max(0, ctx.max_iters - ctx.iter_counter + 1)
+
+
+def _default_parent(ctx: ToolContext) -> int | None:
+    """Choose the parent iter when the agent didn't supply one.
+
+    The records list passed to the lineage module does not yet include
+    the candidate being scored — call this before appending the
+    current iteration's row. Under ``"linear"`` the historical
+    ``last_success_iter`` fallback is preserved exactly. Under
+    ``"evolutionary"`` the lineage module decides.
+    """
+    if ctx.lineage != "evolutionary":
+        return ctx.last_success_iter
+    assert ctx.rng is not None  # guarded by ToolContext.__post_init__
+    return select_parent_evolutionary(
+        ctx.run_log.read_all(),
+        ctx.baseline_metrics,
+        ctx.primary_key,
+        ctx.guardrail_key,
+        ctx.rng,
+    )
+
+
 def _eval_scripts_impl(
     ctx: ToolContext,
     query_source: str,
@@ -225,6 +278,7 @@ def _eval_scripts_impl(
             "budget_exhausted": True,
             "iter": ctx.iter_counter,
             "max_iters": ctx.max_iters,
+            "iters_remaining": _iters_remaining(ctx),
         }
     if len(sort_sources) > ctx.max_sort_scripts:
         return {
@@ -234,17 +288,23 @@ def _eval_scripts_impl(
                 f"too many sort scripts: {len(sort_sources)} > "
                 f"max_sort_scripts={ctx.max_sort_scripts}"
             ),
+            "iters_remaining": _iters_remaining(ctx),
         }
 
     try:
         script_set = ScriptSet(query_source=query_source, sort_sources=list(sort_sources))
     except Exception as exc:
-        return {"ok": False, "iter": ctx.iter_counter, "error": f"invalid script set: {exc}"}
+        return {
+            "ok": False,
+            "iter": ctx.iter_counter,
+            "error": f"invalid script set: {exc}",
+            "iters_remaining": _iters_remaining(ctx),
+        }
 
     iter_n = ctx.iter_counter
-    ctx.iter_counter += 1
     timestamp = _utc_now_iso()
-    parent = parent_iter if parent_iter is not None else ctx.last_success_iter
+    parent = parent_iter if parent_iter is not None else _default_parent(ctx)
+    ctx.iter_counter += 1
 
     query_path_obj, sort_path_objs = snapshot_script_set(ctx.run_dir, iter_n, script_set)
     query_path = str(query_path_obj)
@@ -268,6 +328,7 @@ def _eval_scripts_impl(
             "iter": iter_n,
             "compile_error": outcome,
             "failed_script": None,
+            "iters_remaining": _iters_remaining(ctx),
         }
 
     result = outcome
@@ -295,6 +356,7 @@ def _eval_scripts_impl(
         "eval_seconds": result.eval_seconds,
         "partial_failure": result.partial_failure,
         "sample_error": result.sample_error,
+        "iters_remaining": _iters_remaining(ctx),
     }
 
 
@@ -336,7 +398,7 @@ def _read_history_impl(
     include_sources: bool,
 ) -> dict[str, Any]:
     all_records = ctx.run_log.read_all()
-    primary_key, guardrail_key = _metric_keys(ctx.objective, ctx.k)
+    primary_key, guardrail_key = ctx.primary_key, ctx.guardrail_key
 
     sliced = all_records[-last_n:] if last_n > 0 else []
     records_out = [
@@ -374,6 +436,8 @@ def _read_history_impl(
         "best_so_far": best_so_far,
         "primary_metric": primary_key,
         "guardrail_metric": guardrail_key,
+        "max_iters": ctx.max_iters,
+        "iters_remaining": _iters_remaining(ctx),
     }
 
 

@@ -85,7 +85,20 @@ Tool usage:
   iterations with their metrics, rationales, and (optionally) the
   Painless source inlined. The response also tells you the
   best-so-far iteration by the primary metric and the baseline
-  values.
+  values. The baseline (iter_0) source is already inlined in the
+  initial user message, so do not call ``read_history`` just to
+  retrieve it.
+
+**Iteration budget: {max_iters}** ``eval_scripts`` calls per run.
+Every tool response carries ``iters_remaining`` so you can see how
+much budget is left. Pace yourself — use the budget, don't try to
+land the answer in three iterations.
+
+**Termination policy.** Do not produce a final summary until
+``eval_scripts`` returns ``budget_exhausted``. A plateau is not a
+stop signal — it is a signal to diverge. The wrap-up message you
+produce after termination is recorded but not graded; the run is
+judged by the JSONL, so unused budget is wasted information.
 
 Reasoning guidance:
 
@@ -96,7 +109,6 @@ Reasoning guidance:
   and emit a corrected candidate.
 - Keep changes incremental — change one thing at a time so the
   metric movement is attributable.
-- Stop when you have exhausted the iteration budget.
 """
 
 
@@ -107,6 +119,7 @@ def build_system_prompt(
     diversity_fields: Sequence[str],
     max_sort_scripts: int,
     attribute_fields: Mapping[str, Mapping[str, Any]],
+    max_iters: int,
     k: int = 10,
 ) -> str:
     """Render the system prompt for one run.
@@ -122,6 +135,9 @@ def build_system_prompt(
             produced by ``DatasetAdapter.attribute_field_types``). Used
             to render the list of ``doc[...]`` bindings so the prompt
             cannot drift from the actual index mapping.
+        max_iters: Total ``eval_scripts`` calls permitted in the run.
+            Disclosed so the agent paces itself rather than stopping
+            after a perceived plateau.
         k: Top-K cutoff for metric labels (e.g. ``ndcg@10`` when ``k=10``).
 
     Returns:
@@ -155,4 +171,5 @@ def build_system_prompt(
         primary_value=_fmt(primary_key),
         guardrail_key=guardrail_key,
         guardrail_value=_fmt(guardrail_key),
+        max_iters=max_iters,
     )
