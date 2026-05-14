@@ -93,11 +93,8 @@ def select_parent_evolutionary(
 
     chosen = rng.choices(records, weights=weights, k=1)[0]
 
-    top3 = sorted(
-        ((records[i].iter, weights[i]) for i in range(len(records))),
-        key=lambda t: t[1],
-        reverse=True,
-    )[:3]
+    eligible = [(records[i].iter, weights[i]) for i in range(len(records)) if weights[i] > 0]
+    top3 = sorted(eligible, key=lambda t: t[1], reverse=True)[:3]
     logger.info(
         "lineage: chose parent_iter=%d; top3 candidates=%s",
         chosen.iter,

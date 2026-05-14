@@ -306,6 +306,8 @@ def rl_loop_cmd() -> None:
     model_id = _resolve_model_id(provider)
     lineage_seed = random.randrange(2**32)
     rng = random.Random(lineage_seed)
+    primary_key = f"{args.objective}@{args.k}"
+    guardrail_key = f"{'ild' if args.objective == 'ndcg' else 'ndcg'}@{args.k}"
 
     adapter = load_dataset(args.dataset)
     es = make_client()
@@ -347,7 +349,6 @@ def rl_loop_cmd() -> None:
     )
 
     if args.lineage == "evolutionary":
-        guardrail_key = f"{'ild' if args.objective == 'ndcg' else 'ndcg'}@{args.k}"
         try:
             assert_baseline_eligible(log.read_all(), baseline_result.metrics, guardrail_key)
         except ValueError as exc:
@@ -381,8 +382,6 @@ def rl_loop_cmd() -> None:
     )
 
     llm = make_llm(provider)
-    primary_key = f"{args.objective}@{args.k}"
-    guardrail_key = f"{'ild' if args.objective == 'ndcg' else 'ndcg'}@{args.k}"
 
     run_error: BaseException | None = None
     try:

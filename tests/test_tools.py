@@ -736,7 +736,12 @@ def test_eval_scripts_evolutionary_parent_matches_pure_function(tmp_path: Path) 
 
     tools = _tools_by_name(make_tools(ctx))
     _invoke(tools["eval_scripts"], query_source="return 9.0;", sort_sources=[], rationale="r")
-    assert ctx.run_log.read_all()[-1].parent_iter == expected_parent
+    recorded_parent = ctx.run_log.read_all()[-1].parent_iter
+    assert recorded_parent == expected_parent
+    # Confirms the evolutionary branch is actually consulted: the seed +
+    # records were chosen so the lineage pick diverges from the linear
+    # fallback (`last_success_iter == 2`).
+    assert recorded_parent != 2
 
 
 def test_eval_scripts_linear_default_uses_last_success(tmp_path: Path) -> None:

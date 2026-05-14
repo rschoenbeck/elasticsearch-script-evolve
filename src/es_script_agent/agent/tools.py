@@ -119,6 +119,9 @@ class ToolContext:
     last_success_iter: int | None = 0
     lineage: str = "linear"
     rng: random.Random | None = None
+    # Resolved once at construction; both tools need them on every call.
+    primary_key: str = field(init=False, default="")
+    guardrail_key: str = field(init=False, default="")
     # Pinned at construction so every compile-check uses the same user vector
     # and we don't re-sort the user dict on every tool call. Internal; not
     # exposed as a constructor arg.
@@ -138,6 +141,7 @@ class ToolContext:
             raise ValueError(
                 "lineage='evolutionary' requires an rng; pass a seeded random.Random"
             )
+        self.primary_key, self.guardrail_key = _metric_keys(self.objective, self.k)
         self._compile_check_user_id = min(self.users_by_id)
 
 
@@ -232,22 +236,20 @@ def _make_failure_record(
 def _default_parent(ctx: ToolContext) -> int | None:
     """Choose the parent iter when the agent didn't supply one.
 
-    Read prior records *before* the iter counter advances so the
-    archive seen here matches what was on disk at the start of the
-    call. Under ``"linear"`` the historical ``last_success_iter``
-    fallback is preserved exactly. Under ``"evolutionary"`` the lineage
-    module decides; we only forward the pre-resolved primary/guardrail
-    keys to keep this branch a one-liner.
+    The records list passed to the lineage module does not yet include
+    the candidate being scored — call this before appending the
+    current iteration's row. Under ``"linear"`` the historical
+    ``last_success_iter`` fallback is preserved exactly. Under
+    ``"evolutionary"`` the lineage module decides.
     """
     if ctx.lineage != "evolutionary":
         return ctx.last_success_iter
-    primary_key, guardrail_key = _metric_keys(ctx.objective, ctx.k)
     assert ctx.rng is not None  # guarded by ToolContext.__post_init__
     return select_parent_evolutionary(
         ctx.run_log.read_all(),
         ctx.baseline_metrics,
-        primary_key,
-        guardrail_key,
+        ctx.primary_key,
+        ctx.guardrail_key,
         ctx.rng,
     )
 
@@ -376,7 +378,7 @@ def _read_history_impl(
     include_sources: bool,
 ) -> dict[str, Any]:
     all_records = ctx.run_log.read_all()
-    primary_key, guardrail_key = _metric_keys(ctx.objective, ctx.k)
+    primary_key, guardrail_key = ctx.primary_key, ctx.guardrail_key
 
     sliced = all_records[-last_n:] if last_n > 0 else []
     records_out = [
