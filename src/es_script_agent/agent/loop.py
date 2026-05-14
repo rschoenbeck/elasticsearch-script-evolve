@@ -9,7 +9,8 @@ the invocation surface and the post-run summary.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import logging
+from dataclasses import dataclass
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRetryMiddleware
@@ -17,6 +18,8 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
 from es_script_agent.agent.tools import ToolContext, make_tools
+
+logger = logging.getLogger(__name__)
 
 
 _DEFAULT_INITIAL_MESSAGE = (
@@ -37,20 +40,19 @@ class AgentRunResult:
         iters_attempted: Number of ``eval_scripts`` tool calls that
             advanced the iteration counter (successful + compile-failed
             combined). Excludes budget-rejected calls.
-        warnings: Non-fatal issues surfaced during the run.
     """
 
     final_message: str
     iters_attempted: int
-    warnings: list[str] = field(default_factory=list)
 
 
 def _extract_final_text(messages: list) -> str:
     """Return the text of the most recent ``AIMessage`` in ``messages``.
 
-    Falls back to the string form of the last message when the trace
-    ends with a tool message (rare — only happens if the agent stops
-    mid-cycle).
+    ``create_agent`` always concludes with an AI message; the
+    no-AIMessage branch only fires on a degenerate trace and returns
+    ``""`` after a warning rather than leaking a raw message repr into
+    ``meta.json``.
     """
     for msg in reversed(messages):
         if isinstance(msg, AIMessage):
@@ -58,7 +60,11 @@ def _extract_final_text(messages: list) -> str:
             if isinstance(content, str):
                 return content
             return str(content)
-    return str(messages[-1]) if messages else ""
+    logger.warning(
+        "agent trace ended without an AIMessage (len=%d); returning empty final_message",
+        len(messages),
+    )
+    return ""
 
 
 def run_loop(

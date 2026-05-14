@@ -104,6 +104,28 @@ class RunLog:
         ]
 
 
+def check_guardrail(
+    metrics: dict[str, float | None] | None,
+    key: str,
+    baseline: dict[str, float | None],
+) -> bool:
+    """Return ``True`` iff ``metrics[key]`` is at least ``baseline[key]``.
+
+    A missing baseline is treated as vacuously holding; a missing
+    record value (or ``metrics is None``) is treated as not holding —
+    failures shouldn't be allowed to claim the guardrail.
+    """
+    if not metrics:
+        return False
+    baseline_value = baseline.get(key)
+    if baseline_value is None:
+        return True
+    record_value = metrics.get(key)
+    if record_value is None:
+        return False
+    return record_value >= baseline_value
+
+
 def snapshot_script_set(
     run_dir: Path,
     iter_n: int,

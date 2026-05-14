@@ -137,17 +137,27 @@ def test_rl_loop_jsonl_starts_with_baseline_iter_000(
     assert record["metrics"] is not None
 
 
+@pytest.mark.parametrize(
+    ("provider", "model_attr", "expected_model"),
+    [
+        ("anthropic", "ANTHROPIC_MODEL", "claude-x"),
+        ("openai", "OPENAI_MODEL", "gpt-x"),
+    ],
+)
 def test_rl_loop_records_provider_and_model_id_in_meta(
     monkeypatch: pytest.MonkeyPatch,
     stubbed_rl_loop_env: dict[str, Any],
+    provider: str,
+    model_attr: str,
+    expected_model: str,
 ) -> None:
-    monkeypatch.setattr(cli.config, "ANTHROPIC_MODEL", "claude-x")
-    monkeypatch.setattr("sys.argv", ["rl-loop", "--iters", "3", "--provider", "anthropic"])
+    monkeypatch.setattr(cli.config, model_attr, expected_model)
+    monkeypatch.setattr("sys.argv", ["rl-loop", "--iters", "3", "--provider", provider])
     cli.rl_loop_cmd()
     run_dir = next(stubbed_rl_loop_env["runs_dir"].iterdir())
     meta = json.loads((run_dir / "meta.json").read_text())
-    assert meta["provider"] == "anthropic"
-    assert meta["model_id"] == "claude-x"
+    assert meta["provider"] == provider
+    assert meta["model_id"] == expected_model
 
 
 # --- agent loop & summary ----------------------------------------------
@@ -260,6 +270,32 @@ def test_rl_loop_objective_ild_recorded_in_meta(
     run_dir = next(stubbed_rl_loop_env["runs_dir"].iterdir())
     meta = json.loads((run_dir / "meta.json").read_text())
     assert meta["objective"] == "ild"
+
+
+def test_rl_loop_writes_summary_even_when_agent_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    stubbed_rl_loop_env: dict[str, Any],
+) -> None:
+    """A mid-run LLM failure must still flush a meta.json summary block."""
+
+    def _boom(**kwargs: Any) -> Any:
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(cli, "run_loop", _boom)
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        cli.rl_loop_cmd()
+
+    run_dir = next(stubbed_rl_loop_env["runs_dir"].iterdir())
+    meta = json.loads((run_dir / "meta.json").read_text())
+    summary = meta["summary"]
+    assert "run failed" in summary["final_message"]
+    assert "RuntimeError" in summary["final_message"]
+    assert summary["iters_attempted"] == 0
+    # Baseline was already evaluated before the agent ran; it should
+    # still count as best, but the guardrail check is symmetric so this
+    # holds vacuously (baseline >= baseline).
+    assert summary["best_iter"] == 0
 
 
 def test_rl_loop_max_sort_scripts_flag_recorded(

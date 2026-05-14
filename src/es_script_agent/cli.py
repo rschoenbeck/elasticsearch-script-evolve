@@ -18,9 +18,19 @@ from es_script_agent.es.client import make_client
 from es_script_agent.es.index import fetch_indexed_item_ids, setup_indices
 from es_script_agent.es.query import DEFAULT_MAX_SORT_SCRIPTS
 from es_script_agent.es.schemas import LOANS_INDEX
-from es_script_agent.eval.interactions import build_ground_truth, filter_to_indexed_items
-from es_script_agent.eval.runner import ScriptSet, evaluate, load_script_set
-from es_script_agent.runlog import IterationRecord, RunLog, new_run_dir, snapshot_script_set
+from es_script_agent.eval.interactions import (
+    FilterStats,
+    build_ground_truth,
+    filter_to_indexed_items,
+)
+from es_script_agent.eval.runner import EvalResult, ScriptSet, evaluate, load_script_set
+from es_script_agent.runlog import (
+    IterationRecord,
+    RunLog,
+    check_guardrail,
+    new_run_dir,
+    snapshot_script_set,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +44,94 @@ def _positive_int(raw: str) -> int:
     if value < 1:
         raise argparse.ArgumentTypeError(f"must be >= 1, got {value}")
     return value
+
+
+def _setup_eval_cohort(
+    adapter: object,
+    es: object,
+) -> tuple[dict[str, set[str]], dict[str, object], FilterStats, set[str]]:
+    """Build the filtered ground truth + user lookup for an eval run.
+
+    Pulls raw interactions, fetches the current indexed item ids,
+    filters the ground truth to retrievable items, materialises the
+    per-user vector dict, and logs the drop-rate. Shared between
+    ``baseline_cmd`` and ``rl_loop_cmd``.
+
+    Returns:
+        ``(ground_truth, users_by_id, stats, indexed_ids)``.
+    """
+    raw_ground_truth = build_ground_truth(adapter.iter_interactions())
+    indexed_ids = fetch_indexed_item_ids(es, index=LOANS_INDEX)
+    ground_truth, stats = filter_to_indexed_items(raw_ground_truth, indexed_ids)
+    logger.info(
+        "ground-truth filter: kept %d/%d users, %d/%d positives (%.1f%% dropped)",
+        stats.users_after,
+        stats.users_before,
+        stats.positives_after,
+        stats.positives_before,
+        stats.positives_dropped_pct,
+    )
+    users_by_id = {u.id: u for u in adapter.iter_users() if u.id in ground_truth}
+    return ground_truth, users_by_id, stats, indexed_ids
+
+
+def _snapshot_and_eval_baseline(
+    es: object,
+    run_dir: Path,
+    k: int,
+    ground_truth: dict[str, set[str]],
+    users_by_id: dict[str, object],
+) -> tuple[EvalResult, Path, list[Path], str]:
+    """Load ``scripts/baseline/``, snapshot it as iter_000, and evaluate.
+
+    Returns:
+        ``(result, query_path, sort_paths, started_at)``.
+    """
+    script_set = load_script_set(config.SCRIPTS_DIR / "baseline")
+    query_path, sort_paths = snapshot_script_set(run_dir, 0, script_set)
+    started_at = _utc_now_iso()
+    result = evaluate(
+        es,
+        script_set,
+        ground_truth,
+        users_by_id,
+        k=k,
+        diversity_fields=config.ILD_DIVERSITY_FIELDS,
+    )
+    return result, query_path, sort_paths, started_at
+
+
+def _make_iter_zero_record(
+    *,
+    result: EvalResult,
+    started_at: str,
+    query_path: Path,
+    sort_paths: list[Path],
+) -> IterationRecord:
+    return IterationRecord(
+        iter=0,
+        timestamp=started_at,
+        query_script_path=str(query_path),
+        sort_script_paths=[str(p) for p in sort_paths],
+        metrics=result.metrics,
+        eval_users=result.eval_users,
+        eval_seconds=result.eval_seconds,
+        llm_rationale=None,
+        parent_iter=None,
+        compile_error=None,
+        partial_failure=result.partial_failure,
+        sample_error=result.sample_error,
+    )
+
+
+def _ground_truth_filter_meta(stats: FilterStats) -> dict[str, float | int]:
+    return {
+        "users_before": stats.users_before,
+        "users_after": stats.users_after,
+        "positives_before": stats.positives_before,
+        "positives_after": stats.positives_after,
+        "positives_dropped_pct": stats.positives_dropped_pct,
+    }
 
 
 def setup_indices_cmd() -> None:
@@ -76,31 +174,11 @@ def baseline_cmd() -> None:
     adapter = load_dataset(args.dataset)
     es = make_client()
 
-    raw_ground_truth = build_ground_truth(adapter.iter_interactions())
-    indexed_ids = fetch_indexed_item_ids(es, index=LOANS_INDEX)
-    ground_truth, stats = filter_to_indexed_items(raw_ground_truth, indexed_ids)
-    logger.info(
-        "ground-truth filter: kept %d/%d users, %d/%d positives (%.1f%% dropped)",
-        stats.users_after,
-        stats.users_before,
-        stats.positives_after,
-        stats.positives_before,
-        stats.positives_dropped_pct,
-    )
-    users_by_id = {u.id: u for u in adapter.iter_users() if u.id in ground_truth}
+    ground_truth, users_by_id, stats, _ = _setup_eval_cohort(adapter, es)
 
-    script_set = load_script_set(config.SCRIPTS_DIR / "baseline")
     run_dir = new_run_dir(config.RUNS_DIR)
-    query_path, sort_paths = snapshot_script_set(run_dir, 0, script_set)
-    started_at = _utc_now_iso()
-
-    result = evaluate(
-        es,
-        script_set,
-        ground_truth,
-        users_by_id,
-        k=args.k,
-        diversity_fields=config.ILD_DIVERSITY_FIELDS,
+    result, query_path, sort_paths, started_at = _snapshot_and_eval_baseline(
+        es, run_dir, args.k, ground_truth, users_by_id
     )
 
     log = RunLog(run_dir)
@@ -117,29 +195,15 @@ def baseline_cmd() -> None:
             "ild_diversity_fields": list(config.ILD_DIVERSITY_FIELDS),
             "objective": args.objective,
             "baseline_metrics": result.metrics,
-            "ground_truth_filter": {
-                "users_before": stats.users_before,
-                "users_after": stats.users_after,
-                "positives_before": stats.positives_before,
-                "positives_after": stats.positives_after,
-                "positives_dropped_pct": stats.positives_dropped_pct,
-            },
+            "ground_truth_filter": _ground_truth_filter_meta(stats),
         }
     )
     log.append(
-        IterationRecord(
-            iter=0,
-            timestamp=started_at,
-            query_script_path=str(query_path),
-            sort_script_paths=[str(p) for p in sort_paths],
-            metrics=result.metrics,
-            eval_users=result.eval_users,
-            eval_seconds=result.eval_seconds,
-            llm_rationale=None,
-            parent_iter=None,
-            compile_error=None,
-            partial_failure=result.partial_failure,
-            sample_error=result.sample_error,
+        _make_iter_zero_record(
+            result=result,
+            started_at=started_at,
+            query_path=query_path,
+            sort_paths=sort_paths,
         )
     )
 
@@ -186,33 +250,13 @@ def rl_loop_cmd() -> None:
     adapter = load_dataset(args.dataset)
     es = make_client()
 
-    raw_ground_truth = build_ground_truth(adapter.iter_interactions())
-    indexed_ids = fetch_indexed_item_ids(es, index=LOANS_INDEX)
-    ground_truth, stats = filter_to_indexed_items(raw_ground_truth, indexed_ids)
-    logger.info(
-        "ground-truth filter: kept %d/%d users, %d/%d positives (%.1f%% dropped)",
-        stats.users_after,
-        stats.users_before,
-        stats.positives_after,
-        stats.positives_before,
-        stats.positives_dropped_pct,
-    )
-    users_by_id = {u.id: u for u in adapter.iter_users() if u.id in ground_truth}
+    ground_truth, users_by_id, stats, indexed_ids = _setup_eval_cohort(adapter, es)
     if not users_by_id:
         raise SystemExit("error: filtered ground truth is empty; nothing to evaluate")
 
-    baseline_set = load_script_set(config.SCRIPTS_DIR / "baseline")
     run_dir = new_run_dir(config.RUNS_DIR)
-    started_at = _utc_now_iso()
-
-    query_path, sort_paths = snapshot_script_set(run_dir, 0, baseline_set)
-    baseline_result = evaluate(
-        es,
-        baseline_set,
-        ground_truth,
-        users_by_id,
-        k=args.k,
-        diversity_fields=config.ILD_DIVERSITY_FIELDS,
+    baseline_result, query_path, sort_paths, started_at = _snapshot_and_eval_baseline(
+        es, run_dir, args.k, ground_truth, users_by_id
     )
 
     log = RunLog(run_dir)
@@ -231,29 +275,15 @@ def rl_loop_cmd() -> None:
         "provider": provider,
         "model_id": model_id,
         "max_iters": args.iters,
-        "ground_truth_filter": {
-            "users_before": stats.users_before,
-            "users_after": stats.users_after,
-            "positives_before": stats.positives_before,
-            "positives_after": stats.positives_after,
-            "positives_dropped_pct": stats.positives_dropped_pct,
-        },
+        "ground_truth_filter": _ground_truth_filter_meta(stats),
     }
     log.write_header(meta)
     log.append(
-        IterationRecord(
-            iter=0,
-            timestamp=started_at,
-            query_script_path=str(query_path),
-            sort_script_paths=[str(p) for p in sort_paths],
-            metrics=baseline_result.metrics,
-            eval_users=baseline_result.eval_users,
-            eval_seconds=baseline_result.eval_seconds,
-            llm_rationale=None,
-            parent_iter=None,
-            compile_error=None,
-            partial_failure=baseline_result.partial_failure,
-            sample_error=baseline_result.sample_error,
+        _make_iter_zero_record(
+            result=baseline_result,
+            started_at=started_at,
+            query_path=query_path,
+            sort_paths=sort_paths,
         )
     )
 
@@ -279,43 +309,78 @@ def rl_loop_cmd() -> None:
         diversity_fields=config.ILD_DIVERSITY_FIELDS,
         max_sort_scripts=args.max_sort_scripts,
         reference_dir=config.SCRIPTS_DIR / "reference",
-        attribute_fields=getattr(adapter, "attribute_field_types", {}),
+        attribute_fields=adapter.attribute_field_types,
         k=args.k,
     )
 
     llm = make_llm(provider)
-    result = run_loop(ctx=ctx, llm=llm, system_prompt=system_prompt)
-
-    records = log.read_all()
     primary_key = f"{args.objective}@{args.k}"
     guardrail_key = f"{'ild' if args.objective == 'ndcg' else 'ndcg'}@{args.k}"
-    scored = [
-        r for r in records if r.metrics is not None and r.metrics.get(primary_key) is not None
-    ]
-    best = max(scored, key=lambda r: r.metrics[primary_key]) if scored else None
-    baseline_guardrail = baseline_result.metrics.get(guardrail_key)
-    if best is not None and baseline_guardrail is not None:
-        best_guardrail = best.metrics.get(guardrail_key)
-        guardrail_held = best_guardrail is not None and best_guardrail >= baseline_guardrail
-    else:
-        guardrail_held = best is not None
 
-    summary = {
-        "best_iter": best.iter if best else None,
-        "best_primary": best.metrics[primary_key] if best else None,
-        "guardrail_held": guardrail_held,
-        "iters_attempted": result.iters_attempted,
-        "final_message": result.final_message,
-    }
+    final_message = ""
+    iters_attempted = 0
+    run_error: BaseException | None = None
+    try:
+        result = run_loop(ctx=ctx, llm=llm, system_prompt=system_prompt)
+        final_message = result.final_message
+        iters_attempted = result.iters_attempted
+    except BaseException as exc:  # noqa: BLE001 — we re-raise after persisting
+        run_error = exc
+        final_message = f"<run failed: {type(exc).__name__}: {exc}>"
+        iters_attempted = ctx.iter_counter - 1
+
+    summary = _build_summary(
+        records=log.read_all(),
+        baseline_metrics=baseline_result.metrics,
+        primary_key=primary_key,
+        guardrail_key=guardrail_key,
+        final_message=final_message,
+        iters_attempted=iters_attempted,
+    )
     meta["summary"] = summary
     log.write_header(meta)
 
     print(f"run: {run_dir}")
-    print(f"iters_attempted: {result.iters_attempted}")
+    print(f"iters_attempted: {iters_attempted}")
     print(f"best_iter: {summary['best_iter']}")
-    if best is not None:
-        print(f"best {primary_key}: {best.metrics[primary_key]:.4f}")
-    print(f"guardrail_held ({guardrail_key}): {guardrail_held}")
+    if summary["best_primary"] is not None:
+        print(f"best {primary_key}: {summary['best_primary']:.4f}")
+    print(f"guardrail_held ({guardrail_key}): {summary['guardrail_held']}")
+
+    if run_error is not None:
+        raise run_error
+
+
+def _build_summary(
+    *,
+    records: list[IterationRecord],
+    baseline_metrics: dict[str, float | None],
+    primary_key: str,
+    guardrail_key: str,
+    final_message: str,
+    iters_attempted: int,
+) -> dict[str, object]:
+    """Compute the post-run summary block written into ``meta.json``.
+
+    Selects the best iteration by ``primary_key`` and reuses
+    :func:`runlog.check_guardrail` to decide whether its guardrail
+    metric held against the baseline — matching the same semantics the
+    agent's ``read_history`` tool exposes per record.
+    """
+    scored = [
+        r for r in records if r.metrics is not None and r.metrics.get(primary_key) is not None
+    ]
+    best = max(scored, key=lambda r: r.metrics[primary_key]) if scored else None
+    guardrail_held = (
+        check_guardrail(best.metrics, guardrail_key, baseline_metrics) if best else False
+    )
+    return {
+        "best_iter": best.iter if best else None,
+        "best_primary": best.metrics[primary_key] if best else None,
+        "guardrail_held": guardrail_held,
+        "iters_attempted": iters_attempted,
+        "final_message": final_message,
+    }
 
 
 def build_eval_parser() -> argparse.ArgumentParser:
@@ -404,18 +469,7 @@ def eval_cmd() -> None:
     adapter = load_dataset(args.dataset)
     es = make_client()
 
-    raw_ground_truth = build_ground_truth(adapter.iter_interactions())
-    indexed_ids = fetch_indexed_item_ids(es, index=LOANS_INDEX)
-    ground_truth, stats = filter_to_indexed_items(raw_ground_truth, indexed_ids)
-    logger.info(
-        "ground-truth filter: kept %d/%d users, %d/%d positives (%.1f%% dropped)",
-        stats.users_after,
-        stats.users_before,
-        stats.positives_after,
-        stats.positives_before,
-        stats.positives_dropped_pct,
-    )
-    users_by_id = {u.id: u for u in adapter.iter_users() if u.id in ground_truth}
+    ground_truth, users_by_id, _stats, _indexed_ids = _setup_eval_cohort(adapter, es)
 
     try:
         result = evaluate(

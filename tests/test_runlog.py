@@ -16,6 +16,7 @@ from es_script_agent.eval.runner import ScriptSet
 from es_script_agent.runlog import (
     IterationRecord,
     RunLog,
+    check_guardrail,
     new_run_dir,
     snapshot_script_set,
 )
@@ -156,3 +157,29 @@ def test_new_run_dir_creates_timestamped_subdir(tmp_path: Path) -> None:
     assert name[8] == "-"
     assert name[:8].isdigit()
     assert name[9:].isdigit()
+
+
+# --- check_guardrail ---------------------------------------------------
+
+
+def test_check_guardrail_holds_when_metric_meets_baseline() -> None:
+    assert check_guardrail({"ild@10": 0.5}, "ild@10", {"ild@10": 0.4}) is True
+    assert check_guardrail({"ild@10": 0.4}, "ild@10", {"ild@10": 0.4}) is True
+
+
+def test_check_guardrail_fails_when_metric_below_baseline() -> None:
+    assert check_guardrail({"ild@10": 0.3}, "ild@10", {"ild@10": 0.4}) is False
+
+
+def test_check_guardrail_handles_missing_record_metric() -> None:
+    assert check_guardrail({}, "ild@10", {"ild@10": 0.4}) is False
+    assert check_guardrail({"ild@10": None}, "ild@10", {"ild@10": 0.4}) is False
+
+
+def test_check_guardrail_missing_baseline_vacuously_holds() -> None:
+    assert check_guardrail({"ild@10": 0.1}, "ild@10", {"ild@10": None}) is True
+    assert check_guardrail({"ild@10": 0.1}, "ild@10", {}) is True
+
+
+def test_check_guardrail_none_metrics_dict_fails() -> None:
+    assert check_guardrail(None, "ild@10", {"ild@10": 0.4}) is False

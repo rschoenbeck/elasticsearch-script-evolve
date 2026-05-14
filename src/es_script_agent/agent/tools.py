@@ -40,6 +40,7 @@ from es_script_agent.eval.runner import EvalResult, ScriptSet, evaluate
 from es_script_agent.runlog import (
     IterationRecord,
     RunLog,
+    check_guardrail,
     snapshot_script_set,
 )
 
@@ -304,28 +305,6 @@ def _inline_sources(record: IterationRecord) -> dict[str, Any]:
     return {"query_source": query_source, "sort_sources": sort_sources}
 
 
-def _check_guardrail(
-    metrics: dict[str, float | None] | None,
-    key: str,
-    baseline: dict[str, float | None],
-) -> bool:
-    """Return ``True`` iff ``metrics[key]`` is at least the baseline value.
-
-    A missing baseline is treated as vacuously holding; a missing
-    record value (or ``metrics is None``) is treated as not holding —
-    failures shouldn't be allowed to claim the guardrail.
-    """
-    if not metrics:
-        return False
-    baseline_value = baseline.get(key)
-    if baseline_value is None:
-        return True
-    record_value = metrics.get(key)
-    if record_value is None:
-        return False
-    return record_value >= baseline_value
-
-
 def _record_to_dict(
     record: IterationRecord,
     *,
@@ -344,7 +323,7 @@ def _record_to_dict(
         "compile_error": record.compile_error,
         "partial_failure": record.partial_failure,
         "sample_error": record.sample_error,
-        "guardrail_held": _check_guardrail(record.metrics, guardrail_key, baseline_metrics),
+        "guardrail_held": check_guardrail(record.metrics, guardrail_key, baseline_metrics),
     }
     if include_sources:
         payload.update(_inline_sources(record))
