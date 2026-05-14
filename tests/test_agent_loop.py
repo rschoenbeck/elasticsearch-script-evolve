@@ -216,3 +216,27 @@ def test_build_initial_message_drops_clear_winner_language() -> None:
     assert "clear winner" not in msg.lower()
     # The kick-off should still point the agent at the budget rule.
     assert "budget_exhausted" in msg
+
+
+def test_build_initial_message_omits_hint_block_when_none() -> None:
+    """Default invocation must be byte-equal to passing hint=None — no
+    accidental whitespace drift when the flag is absent."""
+    baseline = ScriptSet(query_source="return 1.0;", sort_sources=[])
+    msg_default = build_initial_message(baseline)
+    msg_explicit_none = build_initial_message(baseline, hint=None)
+    assert msg_default == msg_explicit_none
+    assert "Hint:" not in msg_default
+
+
+def test_build_initial_message_inlines_hint_when_supplied() -> None:
+    baseline = ScriptSet(query_source="return 1.0;", sort_sources=[])
+    msg = build_initial_message(baseline, hint="prefer Math.log1p over raw multiplication")
+    assert "Hint: prefer Math.log1p over raw multiplication" in msg
+    # Hint sits between the intro and the baseline source block.
+    assert msg.index("Hint:") < msg.index("## Baseline query.painless")
+
+
+def test_build_initial_message_treats_whitespace_only_hint_as_absent() -> None:
+    baseline = ScriptSet(query_source="return 1.0;", sort_sources=[])
+    msg = build_initial_message(baseline, hint="   \n  ")
+    assert "Hint:" not in msg

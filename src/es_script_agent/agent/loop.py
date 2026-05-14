@@ -30,18 +30,30 @@ _DEFAULT_INITIAL_MESSAGE = (
 )
 
 
-def build_initial_message(baseline: ScriptSet) -> str:
+def build_initial_message(baseline: ScriptSet, hint: str | None = None) -> str:
     """Render the kick-off user message with baseline Painless inlined.
 
     The baseline source lives in the conversation history exactly once
     — every later turn re-reads the same message rather than each
     iteration carrying its own copy. ``read_history`` is reserved for
     revisiting the agent's own prior iterations.
+
+    Args:
+        baseline: The iter_0 script set whose Painless source is
+            inlined into the message.
+        hint: Optional operator note rendered as ``Hint: <content>``
+            between the intro and the baseline blocks. ``None`` and
+            whitespace-only strings are both treated as absent and
+            yield the unchanged message.
     """
     blocks = [
         "Begin improving the scoring scripts. The baseline (iter_0) Painless "
         "source is inlined below — it produced the baseline metrics in your "
         "system prompt. Treat it as the starting point you will diverge from.",
+    ]
+    if hint is not None and hint.strip():
+        blocks += ["", f"Hint: {hint.strip()}"]
+    blocks += [
         "",
         "## Baseline query.painless",
         "```painless",

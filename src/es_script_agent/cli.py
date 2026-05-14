@@ -300,6 +300,14 @@ def rl_loop_cmd() -> None:
         dest="baseline_dir",
         help="Directory containing query.painless + sort_NN.painless (default: scripts/baseline/).",
     )
+    parser.add_argument(
+        "--hint",
+        default=None,
+        help=(
+            "Optional free-text hint inlined into the agent's kick-off message as "
+            "'Hint: <content>'. Use to pass insights from prior runs."
+        ),
+    )
     args = parser.parse_args()
 
     provider = (args.provider or config.LLM_PROVIDER).lower()
@@ -338,6 +346,7 @@ def rl_loop_cmd() -> None:
     meta["max_iters"] = args.iters
     meta["lineage"] = args.lineage
     meta["lineage_seed"] = lineage_seed
+    meta["hint"] = args.hint
     log.write_header(meta)
     log.append(
         _make_iter_zero_record(
@@ -381,7 +390,7 @@ def rl_loop_cmd() -> None:
         max_iters=args.iters,
         k=args.k,
     )
-    initial_user_message = build_initial_message(load_script_set(baseline_dir))
+    initial_user_message = build_initial_message(load_script_set(baseline_dir), hint=args.hint)
 
     llm = make_llm(provider)
 
