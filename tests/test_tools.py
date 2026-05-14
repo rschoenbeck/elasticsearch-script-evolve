@@ -600,6 +600,25 @@ def test_build_system_prompt_does_not_leak_hardcoded_field_names() -> None:
         assert stale not in prompt, f"prompt still references stale field {stale!r}"
 
 
+def test_build_system_prompt_read_history_blurb_notes_baseline_already_inline() -> None:
+    """The system prompt should tell the agent the baseline source is in
+    the initial user message, so it doesn't waste a tool call asking for
+    iter_0 sources via read_history."""
+    from es_script_agent.agent.prompts import build_system_prompt
+
+    prompt = build_system_prompt(
+        baseline_metrics={"ndcg@10": 0.30, "recall@10": 0.20, "precision@10": 0.10, "ild@10": 0.40},
+        objective="ndcg",
+        diversity_fields=("sector",),
+        max_sort_scripts=5,
+        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=30,
+    )
+    # Some phrasing that points at the initial message — the exact words
+    # are not load-bearing, but the agent must know it has the source.
+    assert "initial" in prompt.lower() or "first message" in prompt.lower() or "user message" in prompt.lower()
+
+
 def test_build_system_prompt_discloses_iteration_budget() -> None:
     """The prompt should name the iteration budget so the agent paces itself."""
     from es_script_agent.agent.prompts import build_system_prompt

@@ -13,7 +13,7 @@ from typing import Any
 from es_script_agent import config
 from es_script_agent.agent.lineage import assert_baseline_eligible
 from es_script_agent.agent.llm import make_llm
-from es_script_agent.agent.loop import run_loop
+from es_script_agent.agent.loop import build_initial_message, run_loop
 from es_script_agent.agent.prompts import build_system_prompt
 from es_script_agent.agent.tools import ToolContext
 from es_script_agent.data import DatasetAdapter, load_dataset
@@ -381,12 +381,18 @@ def rl_loop_cmd() -> None:
         max_iters=args.iters,
         k=args.k,
     )
+    initial_user_message = build_initial_message(load_script_set(baseline_dir))
 
     llm = make_llm(provider)
 
     run_error: BaseException | None = None
     try:
-        result = run_loop(ctx=ctx, llm=llm, system_prompt=system_prompt)
+        result = run_loop(
+            ctx=ctx,
+            llm=llm,
+            system_prompt=system_prompt,
+            initial_user_message=initial_user_message,
+        )
         final_message = result.final_message
         iters_attempted = result.iters_attempted
     except BaseException as exc:  # noqa: BLE001 — we re-raise after persisting

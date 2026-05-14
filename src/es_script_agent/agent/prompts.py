@@ -85,7 +85,9 @@ Tool usage:
   iterations with their metrics, rationales, and (optionally) the
   Painless source inlined. The response also tells you the
   best-so-far iteration by the primary metric and the baseline
-  values.
+  values. The baseline (iter_0) source is already inlined in the
+  initial user message, so do not call ``read_history`` just to
+  retrieve it.
 
 **Iteration budget: {max_iters}** ``eval_scripts`` calls per run.
 Every tool response carries ``iters_remaining`` so you can see how

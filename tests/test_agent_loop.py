@@ -14,9 +14,14 @@ from typing import Any
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
-from es_script_agent.agent.loop import AgentRunResult, run_loop
+from es_script_agent.agent.loop import (
+    AgentRunResult,
+    build_initial_message,
+    run_loop,
+)
 from es_script_agent.agent.tools import ToolContext
 from es_script_agent.data.schema import User
+from es_script_agent.eval.runner import ScriptSet
 from es_script_agent.runlog import RunLog
 
 
@@ -170,3 +175,44 @@ def test_run_loop_extracts_text_from_last_ai_message(tmp_path: Path) -> None:
 
     assert result.final_message == "ready"
     assert result.iters_attempted == 0
+
+
+# --- build_initial_message ---------------------------------------------
+
+
+def test_build_initial_message_inlines_baseline_query_source() -> None:
+    baseline = ScriptSet(query_source="return 1.23;", sort_sources=[])
+    msg = build_initial_message(baseline)
+    assert "return 1.23;" in msg
+    assert "query.painless" in msg
+
+
+def test_build_initial_message_inlines_all_baseline_sort_sources() -> None:
+    baseline = ScriptSet(
+        query_source="return 1.0;",
+        sort_sources=["return _score * 2;", "return doc['x'].value;"],
+    )
+    msg = build_initial_message(baseline)
+    assert "return _score * 2;" in msg
+    assert "return doc['x'].value;" in msg
+    # Each sort script is labeled by its position so the agent can
+    # reference the execution order.
+    assert "sort_00" in msg
+    assert "sort_01" in msg
+
+
+def test_build_initial_message_handles_zero_sort_scripts() -> None:
+    """Baseline with no sort scripts should not render an empty sort block."""
+    baseline = ScriptSet(query_source="return 1.0;", sort_sources=[])
+    msg = build_initial_message(baseline)
+    assert "sort_00" not in msg
+
+
+def test_build_initial_message_drops_clear_winner_language() -> None:
+    """The new termination policy lives in the system prompt; the kick-off
+    must not reintroduce 'stop on clear winner' framing."""
+    baseline = ScriptSet(query_source="return 1.0;", sort_sources=[])
+    msg = build_initial_message(baseline)
+    assert "clear winner" not in msg.lower()
+    # The kick-off should still point the agent at the budget rule.
+    assert "budget_exhausted" in msg
