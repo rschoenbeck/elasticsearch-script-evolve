@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+import random
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Any
 
 from es_script_agent import config
+from es_script_agent.agent.lineage import assert_baseline_eligible
 from es_script_agent.agent.llm import make_llm
 from es_script_agent.agent.loop import run_loop
 from es_script_agent.agent.prompts import build_system_prompt
@@ -283,6 +285,16 @@ def rl_loop_cmd() -> None:
     parser.add_argument("--objective", default=config.DEFAULT_OBJECTIVE, choices=("ndcg", "ild"))
     parser.add_argument("--k", type=_positive_int, default=10)
     parser.add_argument(
+        "--lineage",
+        default="linear",
+        choices=("linear", "evolutionary"),
+        help=(
+            "Parent-selection strategy. 'linear' (default) descends each iter from the "
+            "previous successful one. 'evolutionary' samples from the archive proportional "
+            "to fitness × 1/(1+children)."
+        ),
+    )
+    parser.add_argument(
         "--baseline-dir",
         default=None,
         dest="baseline_dir",
@@ -292,6 +304,8 @@ def rl_loop_cmd() -> None:
 
     provider = (args.provider or config.LLM_PROVIDER).lower()
     model_id = _resolve_model_id(provider)
+    lineage_seed = random.randrange(2**32)
+    rng = random.Random(lineage_seed)
 
     adapter = load_dataset(args.dataset)
     es = make_client()
@@ -320,6 +334,8 @@ def rl_loop_cmd() -> None:
     meta["provider"] = provider
     meta["model_id"] = model_id
     meta["max_iters"] = args.iters
+    meta["lineage"] = args.lineage
+    meta["lineage_seed"] = lineage_seed
     log.write_header(meta)
     log.append(
         _make_iter_zero_record(
@@ -329,6 +345,13 @@ def rl_loop_cmd() -> None:
             sort_paths=sort_paths,
         )
     )
+
+    if args.lineage == "evolutionary":
+        guardrail_key = f"{'ild' if args.objective == 'ndcg' else 'ndcg'}@{args.k}"
+        try:
+            assert_baseline_eligible(log.read_all(), baseline_result.metrics, guardrail_key)
+        except ValueError as exc:
+            raise SystemExit(f"error: {exc}") from exc
 
     ctx = ToolContext(
         es=es,
@@ -344,6 +367,8 @@ def rl_loop_cmd() -> None:
         k=args.k,
         diversity_fields=config.ILD_DIVERSITY_FIELDS,
         index=LOANS_INDEX,
+        lineage=args.lineage,
+        rng=rng,
     )
 
     system_prompt = build_system_prompt(

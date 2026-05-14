@@ -23,6 +23,7 @@ when it is over the cap and terminates naturally.
 from __future__ import annotations
 
 import logging
+import random
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from es_script_agent import config
+from es_script_agent.agent.lineage import select_parent_evolutionary
 from es_script_agent.data.schema import User
 from es_script_agent.es.client import format_es_error
 from es_script_agent.es.query import DEFAULT_MAX_SORT_SCRIPTS, build_query
@@ -89,6 +91,15 @@ class ToolContext:
             ``parent_iter`` when the agent omits it. Defaults to ``0``
             (the baseline) so the first agent iteration descends from
             it, and is only overwritten by successful agent iterations.
+        lineage: ``"linear"`` (default) preserves the historical
+            ``last_success_iter`` fallback. ``"evolutionary"`` routes
+            the default-parent decision through
+            :func:`select_parent_evolutionary`. An explicit
+            ``parent_iter`` from the agent always wins under either
+            strategy.
+        rng: Seeded ``random.Random`` constructed once at CLI entry.
+            Required under ``lineage="evolutionary"``; unused under
+            ``"linear"``.
     """
 
     es: Any
@@ -106,6 +117,8 @@ class ToolContext:
     index: str = LOANS_INDEX
     iter_counter: int = 1
     last_success_iter: int | None = 0
+    lineage: str = "linear"
+    rng: random.Random | None = None
     # Pinned at construction so every compile-check uses the same user vector
     # and we don't re-sort the user dict on every tool call. Internal; not
     # exposed as a constructor arg.
@@ -120,6 +133,10 @@ class ToolContext:
         if self.max_sort_scripts < 0:
             raise ValueError(
                 f"max_sort_scripts must be non-negative; got {self.max_sort_scripts}"
+            )
+        if self.lineage == "evolutionary" and self.rng is None:
+            raise ValueError(
+                "lineage='evolutionary' requires an rng; pass a seeded random.Random"
             )
         self._compile_check_user_id = min(self.users_by_id)
 
@@ -212,6 +229,29 @@ def _make_failure_record(
     )
 
 
+def _default_parent(ctx: ToolContext) -> int | None:
+    """Choose the parent iter when the agent didn't supply one.
+
+    Read prior records *before* the iter counter advances so the
+    archive seen here matches what was on disk at the start of the
+    call. Under ``"linear"`` the historical ``last_success_iter``
+    fallback is preserved exactly. Under ``"evolutionary"`` the lineage
+    module decides; we only forward the pre-resolved primary/guardrail
+    keys to keep this branch a one-liner.
+    """
+    if ctx.lineage != "evolutionary":
+        return ctx.last_success_iter
+    primary_key, guardrail_key = _metric_keys(ctx.objective, ctx.k)
+    assert ctx.rng is not None  # guarded by ToolContext.__post_init__
+    return select_parent_evolutionary(
+        ctx.run_log.read_all(),
+        ctx.baseline_metrics,
+        primary_key,
+        guardrail_key,
+        ctx.rng,
+    )
+
+
 def _eval_scripts_impl(
     ctx: ToolContext,
     query_source: str,
@@ -242,9 +282,9 @@ def _eval_scripts_impl(
         return {"ok": False, "iter": ctx.iter_counter, "error": f"invalid script set: {exc}"}
 
     iter_n = ctx.iter_counter
-    ctx.iter_counter += 1
     timestamp = _utc_now_iso()
-    parent = parent_iter if parent_iter is not None else ctx.last_success_iter
+    parent = parent_iter if parent_iter is not None else _default_parent(ctx)
+    ctx.iter_counter += 1
 
     query_path_obj, sort_path_objs = snapshot_script_set(ctx.run_dir, iter_n, script_set)
     query_path = str(query_path_obj)

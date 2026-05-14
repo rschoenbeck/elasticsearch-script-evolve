@@ -627,3 +627,146 @@ def test_tool_context_persists_run_meta(tmp_path: Path) -> None:
     _run_a_few(ctx, n=1)
     meta = json.loads((ctx.run_dir / "meta.json").read_text())
     assert meta["k"] == 10
+
+
+# --- evolutionary lineage wiring ---------------------------------------
+
+
+def test_tool_context_evolutionary_without_rng_raises(tmp_path: Path) -> None:
+    """An ``"evolutionary"`` context without an RNG is a wiring bug."""
+    import random
+
+    run_dir = tmp_path / "run_x"
+    run_dir.mkdir()
+    log = RunLog(run_dir)
+    log.write_header({})
+    with pytest.raises(ValueError, match="rng"):
+        ToolContext(
+            es=_FakeES(),
+            run_dir=run_dir,
+            run_log=log,
+            ground_truth={"u1": {"x"}},
+            users_by_id={"u1": _user("u1", 1.0)},
+            indexed_item_ids={"x"},
+            baseline_metrics=_baseline_metrics(),
+            lineage="evolutionary",
+            rng=None,
+        )
+    # Sanity: passing the RNG works.
+    ToolContext(
+        es=_FakeES(),
+        run_dir=run_dir,
+        run_log=log,
+        ground_truth={"u1": {"x"}},
+        users_by_id={"u1": _user("u1", 1.0)},
+        indexed_item_ids={"x"},
+        baseline_metrics=_baseline_metrics(),
+        lineage="evolutionary",
+        rng=random.Random(0),
+    )
+
+
+def test_eval_scripts_evolutionary_parent_matches_pure_function(tmp_path: Path) -> None:
+    """``--lineage evolutionary`` routes parent selection through the lineage module."""
+    import random
+
+    from es_script_agent.agent.lineage import select_parent_evolutionary
+
+    ctx = ToolContext(
+        es=_FakeES(),
+        run_dir=tmp_path / "run_x",
+        run_log=RunLog(tmp_path / "run_x"),
+        ground_truth={"u1": {"item_pos"}},
+        users_by_id={"u1": _user("u1", 1.0)},
+        indexed_item_ids={"item_pos"},
+        baseline_metrics=_baseline_metrics(),
+        objective="ndcg",
+        max_iters=5,
+        max_sort_scripts=DEFAULT_MAX_SORT_SCRIPTS,
+        k=10,
+        diversity_fields=("sector", "country"),
+        lineage="evolutionary",
+        rng=random.Random(123),
+    )
+    ctx.run_dir.mkdir()
+    ctx.run_log.write_header({"k": 10, "objective": "ndcg"})
+    # Seed iter_000 + iter_001 + iter_002 with diverse parent_iter / fitness so the
+    # offspring penalty has something to bite on.
+    from es_script_agent.runlog import IterationRecord
+
+    for iter_n, parent, primary in [(0, None, 0.30), (1, 0, 0.50), (2, 0, 0.45)]:
+        snapshot_dir = ctx.run_dir / f"iter_{iter_n:03d}"
+        snapshot_dir.mkdir()
+        (snapshot_dir / "query.painless").write_text(f"return {iter_n};")
+        ctx.run_log.append(
+            IterationRecord(
+                iter=iter_n,
+                timestamp="2026-01-01T00:00:00Z",
+                query_script_path=str(snapshot_dir / "query.painless"),
+                sort_script_paths=[],
+                metrics={
+                    "ndcg@10": primary,
+                    "recall@10": 0.2,
+                    "precision@10": 0.1,
+                    "ild@10": 0.5,
+                },
+                eval_users=1,
+                eval_seconds=0.0,
+                llm_rationale=None,
+                parent_iter=parent,
+                compile_error=None,
+                partial_failure=False,
+                sample_error=None,
+            )
+        )
+    ctx.iter_counter = 3
+    ctx.last_success_iter = 2
+
+    # Predict the lineage pick using an RNG seeded identically to ctx.rng's state.
+    # Trick: snapshot the rng state, branch a clone, predict, then restore.
+    rng_state = ctx.rng.getstate()  # type: ignore[union-attr]
+    expected_parent = select_parent_evolutionary(
+        ctx.run_log.read_all(),
+        ctx.baseline_metrics,
+        "ndcg@10",
+        "ild@10",
+        ctx.rng,  # type: ignore[arg-type]
+    )
+    ctx.rng.setstate(rng_state)  # type: ignore[union-attr]
+
+    tools = _tools_by_name(make_tools(ctx))
+    _invoke(tools["eval_scripts"], query_source="return 9.0;", sort_sources=[], rationale="r")
+    assert ctx.run_log.read_all()[-1].parent_iter == expected_parent
+
+
+def test_eval_scripts_linear_default_uses_last_success(tmp_path: Path) -> None:
+    """The default (``lineage="linear"``) keeps the existing fallback."""
+    ctx = _make_ctx(tmp_path)
+    assert ctx.lineage == "linear"
+    tools = _tools_by_name(make_tools(ctx))
+    _invoke(tools["eval_scripts"], query_source="Q1", sort_sources=[], rationale="r")
+    _invoke(tools["eval_scripts"], query_source="Q2", sort_sources=[], rationale="r")
+    records = ctx.run_log.read_all()
+    # Same expectation as the existing linear-path test:
+    # iter_001 ⇐ baseline, iter_002 ⇐ iter_001.
+    assert records[1].parent_iter == 0
+    assert records[2].parent_iter == 1
+
+
+def test_eval_scripts_explicit_parent_iter_wins_under_evolutionary(tmp_path: Path) -> None:
+    """An agent-supplied ``parent_iter`` must not be overridden by lineage selection."""
+    import random
+
+    ctx = _make_ctx(tmp_path)
+    # Convert the linear ctx into an evolutionary one without rebuilding the run dir.
+    ctx.lineage = "evolutionary"
+    ctx.rng = random.Random(0)
+    tools = _tools_by_name(make_tools(ctx))
+    _invoke(
+        tools["eval_scripts"],
+        query_source="Q",
+        sort_sources=[],
+        rationale="r",
+        parent_iter=42,
+    )
+    assert ctx.run_log.read_all()[-1].parent_iter == 42
