@@ -548,6 +548,7 @@ def test_build_system_prompt_includes_contract_fragments() -> None:
         diversity_fields=("sector", "country", "partnerId"),
         max_sort_scripts=5,
         attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=30,
     )
     assert "user_vector" in prompt
     assert "item_vector" in prompt
@@ -575,6 +576,7 @@ def test_build_system_prompt_renders_attribute_fields_with_types() -> None:
         diversity_fields=("sector",),
         max_sort_scripts=5,
         attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=30,
     )
     assert "doc['loanAmount']" in prompt and "double" in prompt
     assert "doc['popularityScore']" in prompt and "integer" in prompt
@@ -591,10 +593,49 @@ def test_build_system_prompt_does_not_leak_hardcoded_field_names() -> None:
         diversity_fields=("sector",),
         max_sort_scripts=5,
         attribute_fields={"sector": {"type": "keyword"}},
+        max_iters=30,
     )
     # Stale names from earlier hardcoded list — must not appear unless passed in.
     for stale in ("activityId", "researchScore", "partnerRiskRating"):
         assert stale not in prompt, f"prompt still references stale field {stale!r}"
+
+
+def test_build_system_prompt_discloses_iteration_budget() -> None:
+    """The prompt should name the iteration budget so the agent paces itself."""
+    from es_script_agent.agent.prompts import build_system_prompt
+
+    prompt = build_system_prompt(
+        baseline_metrics={"ndcg@10": 0.30, "recall@10": 0.20, "precision@10": 0.10, "ild@10": 0.40},
+        objective="ndcg",
+        diversity_fields=("sector",),
+        max_sort_scripts=5,
+        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=42,
+    )
+    # The exact number is disclosed.
+    assert "42" in prompt
+    # The remaining-iters field name is documented so the agent knows
+    # what to watch for in tool responses.
+    assert "iters_remaining" in prompt
+
+
+def test_build_system_prompt_anti_early_stop_language() -> None:
+    """The termination paragraph must counter the model's natural wrap-up habit."""
+    from es_script_agent.agent.prompts import build_system_prompt
+
+    prompt = build_system_prompt(
+        baseline_metrics={"ndcg@10": 0.30, "recall@10": 0.20, "precision@10": 0.10, "ild@10": 0.40},
+        objective="ndcg",
+        diversity_fields=("sector",),
+        max_sort_scripts=5,
+        attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=30,
+    )
+    # The plateau-not-stop rule is named explicitly.
+    assert "budget_exhausted" in prompt
+    assert "plateau" in prompt.lower()
+    # The "summary is not graded" anchor counters cleanup-and-conclude.
+    assert "not graded" in prompt.lower()
 
 
 def test_build_system_prompt_objective_flips_primary_and_guardrail() -> None:
@@ -606,6 +647,7 @@ def test_build_system_prompt_objective_flips_primary_and_guardrail() -> None:
         diversity_fields=("sector",),
         max_sort_scripts=5,
         attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=30,
     )
     ild_prompt = build_system_prompt(
         baseline_metrics={"ndcg@10": 0.30, "recall@10": 0.20, "precision@10": 0.10, "ild@10": 0.40},
@@ -613,6 +655,7 @@ def test_build_system_prompt_objective_flips_primary_and_guardrail() -> None:
         diversity_fields=("sector",),
         max_sort_scripts=5,
         attribute_fields=_SAMPLE_ATTRIBUTE_FIELDS,
+        max_iters=30,
     )
     # Same metrics, flipped framing → outputs differ.
     assert ndcg_prompt != ild_prompt
@@ -756,6 +799,50 @@ def test_eval_scripts_linear_default_uses_last_success(tmp_path: Path) -> None:
     # iter_001 ⇐ baseline, iter_002 ⇐ iter_001.
     assert records[1].parent_iter == 0
     assert records[2].parent_iter == 1
+
+
+def test_eval_scripts_response_carries_iters_remaining(tmp_path: Path) -> None:
+    """Successful and failed eval_scripts responses both report budget left."""
+    ctx = _make_ctx(tmp_path, max_iters=3)
+    tools = _tools_by_name(make_tools(ctx))
+
+    r1 = _invoke(tools["eval_scripts"], query_source="Q1", sort_sources=[], rationale="r")
+    r2 = _invoke(tools["eval_scripts"], query_source="Q2", sort_sources=[], rationale="r")
+    r3 = _invoke(tools["eval_scripts"], query_source="Q3", sort_sources=[], rationale="r")
+
+    # After call N (N successful), iters_remaining = max_iters - N.
+    assert r1["iters_remaining"] == 2
+    assert r2["iters_remaining"] == 1
+    assert r3["iters_remaining"] == 0
+
+
+def test_eval_scripts_budget_exhausted_reports_iters_remaining_zero(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path, max_iters=1)
+    tools = _tools_by_name(make_tools(ctx))
+    _invoke(tools["eval_scripts"], query_source="Q1", sort_sources=[], rationale="r")
+    r2 = _invoke(tools["eval_scripts"], query_source="Q2", sort_sources=[], rationale="r")
+    assert r2.get("budget_exhausted") is True
+    assert r2["iters_remaining"] == 0
+
+
+def test_eval_scripts_compile_failure_reports_iters_remaining(tmp_path: Path) -> None:
+    """Failed iterations also consume budget; the response must say so."""
+    es = _FakeES(compile_response=RuntimeError("nope"))
+    ctx = _make_ctx(tmp_path, es=es, max_iters=3)
+    tools = _tools_by_name(make_tools(ctx))
+    r1 = _invoke(tools["eval_scripts"], query_source="bad", sort_sources=[], rationale="r")
+    assert r1["ok"] is False
+    assert r1["iters_remaining"] == 2
+
+
+def test_read_history_response_carries_iters_remaining(tmp_path: Path) -> None:
+    """``read_history`` reports the budget too so the agent can re-anchor cheaply."""
+    ctx = _make_ctx(tmp_path, max_iters=5)
+    tools = _tools_by_name(make_tools(ctx))
+    _invoke(tools["eval_scripts"], query_source="Q1", sort_sources=[], rationale="r")
+    out = _invoke(tools["read_history"], last_n=5)
+    assert out["iters_remaining"] == 4
+    assert out["max_iters"] == 5
 
 
 def test_eval_scripts_explicit_parent_iter_wins_under_evolutionary(tmp_path: Path) -> None:

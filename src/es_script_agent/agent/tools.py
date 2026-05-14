@@ -233,6 +233,17 @@ def _make_failure_record(
     )
 
 
+def _iters_remaining(ctx: ToolContext) -> int:
+    """Count of ``eval_scripts`` calls still permitted after the current one.
+
+    Reported in every tool response so the agent can pace itself
+    without re-asking. ``ctx.iter_counter`` is the *next* slot to
+    assign, so the formula uses ``+ 1`` to include the current call
+    when it has not been incremented yet.
+    """
+    return max(0, ctx.max_iters - ctx.iter_counter + 1)
+
+
 def _default_parent(ctx: ToolContext) -> int | None:
     """Choose the parent iter when the agent didn't supply one.
 
@@ -267,6 +278,7 @@ def _eval_scripts_impl(
             "budget_exhausted": True,
             "iter": ctx.iter_counter,
             "max_iters": ctx.max_iters,
+            "iters_remaining": _iters_remaining(ctx),
         }
     if len(sort_sources) > ctx.max_sort_scripts:
         return {
@@ -276,12 +288,18 @@ def _eval_scripts_impl(
                 f"too many sort scripts: {len(sort_sources)} > "
                 f"max_sort_scripts={ctx.max_sort_scripts}"
             ),
+            "iters_remaining": _iters_remaining(ctx),
         }
 
     try:
         script_set = ScriptSet(query_source=query_source, sort_sources=list(sort_sources))
     except Exception as exc:
-        return {"ok": False, "iter": ctx.iter_counter, "error": f"invalid script set: {exc}"}
+        return {
+            "ok": False,
+            "iter": ctx.iter_counter,
+            "error": f"invalid script set: {exc}",
+            "iters_remaining": _iters_remaining(ctx),
+        }
 
     iter_n = ctx.iter_counter
     timestamp = _utc_now_iso()
@@ -310,6 +328,7 @@ def _eval_scripts_impl(
             "iter": iter_n,
             "compile_error": outcome,
             "failed_script": None,
+            "iters_remaining": _iters_remaining(ctx),
         }
 
     result = outcome
@@ -337,6 +356,7 @@ def _eval_scripts_impl(
         "eval_seconds": result.eval_seconds,
         "partial_failure": result.partial_failure,
         "sample_error": result.sample_error,
+        "iters_remaining": _iters_remaining(ctx),
     }
 
 
@@ -416,6 +436,8 @@ def _read_history_impl(
         "best_so_far": best_so_far,
         "primary_metric": primary_key,
         "guardrail_metric": guardrail_key,
+        "max_iters": ctx.max_iters,
+        "iters_remaining": _iters_remaining(ctx),
     }
 
 

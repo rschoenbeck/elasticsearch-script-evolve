@@ -378,6 +378,7 @@ def rl_loop_cmd() -> None:
         diversity_fields=config.ILD_DIVERSITY_FIELDS,
         max_sort_scripts=args.max_sort_scripts,
         attribute_fields=adapter.attribute_field_types,
+        max_iters=args.iters,
         k=args.k,
     )
 
