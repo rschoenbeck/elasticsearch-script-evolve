@@ -7,13 +7,15 @@ import logging
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version
 from pathlib import Path
+from typing import Any
 
 from es_script_agent import config
 from es_script_agent.agent.llm import make_llm
 from es_script_agent.agent.loop import run_loop
 from es_script_agent.agent.prompts import build_system_prompt
 from es_script_agent.agent.tools import ToolContext
-from es_script_agent.data import load_dataset
+from es_script_agent.data import DatasetAdapter, load_dataset
+from es_script_agent.data.schema import User
 from es_script_agent.es.client import make_client
 from es_script_agent.es.index import fetch_indexed_item_ids, setup_indices
 from es_script_agent.es.query import DEFAULT_MAX_SORT_SCRIPTS
@@ -47,9 +49,9 @@ def _positive_int(raw: str) -> int:
 
 
 def _setup_eval_cohort(
-    adapter: object,
-    es: object,
-) -> tuple[dict[str, set[str]], dict[str, object], FilterStats, set[str]]:
+    adapter: DatasetAdapter,
+    es: Any,
+) -> tuple[dict[str, set[str]], dict[str, User], FilterStats, set[str]]:
     """Build the filtered ground truth + user lookup for an eval run.
 
     Pulls raw interactions, fetches the current indexed item ids,
@@ -76,11 +78,11 @@ def _setup_eval_cohort(
 
 
 def _snapshot_and_eval_baseline(
-    es: object,
+    es: Any,
     run_dir: Path,
     k: int,
     ground_truth: dict[str, set[str]],
-    users_by_id: dict[str, object],
+    users_by_id: dict[str, User],
 ) -> tuple[EvalResult, Path, list[Path], str]:
     """Load ``scripts/baseline/``, snapshot it as iter_000, and evaluate.
 
@@ -134,6 +136,40 @@ def _ground_truth_filter_meta(stats: FilterStats) -> dict[str, float | int]:
     }
 
 
+def _base_meta_header(
+    *,
+    dataset: str,
+    k: int,
+    objective: str,
+    cohort_size: int,
+    max_sort_scripts: int,
+    started_at: str,
+    baseline_metrics: dict[str, float | None],
+    stats: FilterStats,
+) -> dict[str, Any]:
+    """Build the keys ``meta.json`` carries on every run.
+
+    Shared between :func:`baseline_cmd` and :func:`rl_loop_cmd` so the
+    immutable header schema can't drift between commands. Callers
+    append run-mode-specific keys (e.g. provider/model_id on rl-loop)
+    after this returns.
+    """
+    return {
+        "dataset": dataset,
+        "relevance_threshold": config.RELEVANCE_THRESHOLD,
+        "k": k,
+        "cohort_size": cohort_size,
+        "seed": 0,
+        "max_sort_scripts": max_sort_scripts,
+        "harness_version": pkg_version("elasticsearch-agentic-script-sorting"),
+        "created_at": started_at,
+        "ild_diversity_fields": list(config.ILD_DIVERSITY_FIELDS),
+        "objective": objective,
+        "baseline_metrics": baseline_metrics,
+        "ground_truth_filter": _ground_truth_filter_meta(stats),
+    }
+
+
 def setup_indices_cmd() -> None:
     """Drop, recreate, and bulk-load the ``loans`` and ``users`` indices."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -183,20 +219,16 @@ def baseline_cmd() -> None:
 
     log = RunLog(run_dir)
     log.write_header(
-        {
-            "dataset": args.dataset,
-            "relevance_threshold": config.RELEVANCE_THRESHOLD,
-            "k": args.k,
-            "cohort_size": len(ground_truth),
-            "seed": 0,
-            "max_sort_scripts": DEFAULT_MAX_SORT_SCRIPTS,
-            "harness_version": pkg_version("elasticsearch-agentic-script-sorting"),
-            "created_at": started_at,
-            "ild_diversity_fields": list(config.ILD_DIVERSITY_FIELDS),
-            "objective": args.objective,
-            "baseline_metrics": result.metrics,
-            "ground_truth_filter": _ground_truth_filter_meta(stats),
-        }
+        _base_meta_header(
+            dataset=args.dataset,
+            k=args.k,
+            objective=args.objective,
+            cohort_size=len(ground_truth),
+            max_sort_scripts=DEFAULT_MAX_SORT_SCRIPTS,
+            started_at=started_at,
+            baseline_metrics=result.metrics,
+            stats=stats,
+        )
     )
     log.append(
         _make_iter_zero_record(
@@ -260,23 +292,19 @@ def rl_loop_cmd() -> None:
     )
 
     log = RunLog(run_dir)
-    meta = {
-        "dataset": args.dataset,
-        "relevance_threshold": config.RELEVANCE_THRESHOLD,
-        "k": args.k,
-        "cohort_size": len(ground_truth),
-        "seed": 0,
-        "max_sort_scripts": args.max_sort_scripts,
-        "harness_version": pkg_version("elasticsearch-agentic-script-sorting"),
-        "created_at": started_at,
-        "ild_diversity_fields": list(config.ILD_DIVERSITY_FIELDS),
-        "objective": args.objective,
-        "baseline_metrics": baseline_result.metrics,
-        "provider": provider,
-        "model_id": model_id,
-        "max_iters": args.iters,
-        "ground_truth_filter": _ground_truth_filter_meta(stats),
-    }
+    meta = _base_meta_header(
+        dataset=args.dataset,
+        k=args.k,
+        objective=args.objective,
+        cohort_size=len(ground_truth),
+        max_sort_scripts=args.max_sort_scripts,
+        started_at=started_at,
+        baseline_metrics=baseline_result.metrics,
+        stats=stats,
+    )
+    meta["provider"] = provider
+    meta["model_id"] = model_id
+    meta["max_iters"] = args.iters
     log.write_header(meta)
     log.append(
         _make_iter_zero_record(
@@ -317,8 +345,6 @@ def rl_loop_cmd() -> None:
     primary_key = f"{args.objective}@{args.k}"
     guardrail_key = f"{'ild' if args.objective == 'ndcg' else 'ndcg'}@{args.k}"
 
-    final_message = ""
-    iters_attempted = 0
     run_error: BaseException | None = None
     try:
         result = run_loop(ctx=ctx, llm=llm, system_prompt=system_prompt)
