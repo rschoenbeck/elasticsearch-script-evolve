@@ -64,4 +64,4 @@ If you're about to change any of the above, that's a SPEC §6 "ask first" — su
 - Specs and planning docs live in `plans/`, not the repo root.
 - No `tests/__init__.py` — pytest + src layout discovers tests without it.
 - Conventional commits with branch prefixes: `chore/…`, `feat/…`, `fix/…`. The first commit on a branch leads with the matching type (`chore:`, `feat:`, `fix:`).
-- Gitignored and never committed: `data/`, `runs/`, `scripts/reference/`, `.env`, any API keys. Verify before commit.
+- Gitignored and never committed: `data/`, `runs/`, `.env`, any API keys. Verify before commit.
