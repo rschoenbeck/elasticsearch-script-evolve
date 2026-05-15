@@ -22,10 +22,10 @@ Day-to-day rules for contributors (humans or agents) live in `AGENTS.md`.
 
 ## Design highlights
 
-- **Harness owns the query/sort JSON shape.** The agent edits only
+- **Code harness maintains control over query/sort scripts.** The agent edits only
   Painless `source` strings and the count of sort scripts. It cannot
   change the eval cohort, the ground truth, the metric implementations,
-  or the params bag — the only way to win is to write a better script.
+  or the params — the only way to win is to write a better script.
 - **Symmetric objective + guardrail.** Each run picks a primary metric
   (`ndcg` or `ild`); the other becomes a guardrail that must hold above
   baseline. A ranking that wins on one axis by collapsing the other is
