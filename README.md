@@ -6,11 +6,6 @@ Precision@10, ILD@10) against a local Elasticsearch index. Each iteration
 emits **one query script + zero-to-N sort scripts**; the harness owns the
 surrounding query JSON, the eval cohort, the ground truth, and the run log.
 
-The authoritative design docs are in `plans/`:
-
-- `plans/SPEC.md` — what we're building and why.
-- `plans/SPEC_EVOLUTIONARY_LINEAGE.md` — the evolutionary parent-selection mode.
-
 Day-to-day rules for contributors (humans or agents) live in `AGENTS.md`.
 
 ## Prerequisites
@@ -127,8 +122,7 @@ Flags:
 - `--max-sort-scripts`: cap on sort scripts per iteration (default 5).
 - `--objective`: `ndcg` (default) or `ild`. The other metric becomes the
   guardrail and must not collapse below baseline.
-- `--lineage`: `linear` (default) or `evolutionary` parent selection. See
-  `plans/SPEC_EVOLUTIONARY_LINEAGE.md`.
+- `--lineage`: `linear` (default) or `evolutionary` parent selection.
 - `--baseline-dir`: alternative starting script set.
 - `--hint`: free-text hint inlined into the agent's kick-off message.
 
@@ -186,14 +180,17 @@ Full contract docs: `scripts/README.md`.
 ## Testing
 
 ```bash
-pytest                  # unit tests; fast, hermetic
-pytest -m integration   # needs ES up and `setup-indices` already run
+pytest
 ```
 
-Integration tests are the pre-experiment gate, not part of the default
-loop. After any harness change, re-run `uv run baseline` and confirm
-metrics match the last recorded baseline within float tolerance — drift
-there means the eval harness moved and cross-run comparisons are invalid.
+All current tests are unit tests — fast, hermetic, no Elasticsearch
+required. The SPEC reserves an `integration` pytest marker for tests
+that hit a live ES node, but none are implemented yet.
+
+The real pre-experiment gate is `uv run baseline`: after any harness
+change, re-run it and confirm metrics match the last recorded baseline
+within float tolerance. Drift there means the eval harness moved and
+cross-run comparisons are invalid.
 
 ## Project layout
 
@@ -209,7 +206,6 @@ src/es_script_agent/
   runlog.py           # JSONL writer + reader, snapshotting
 scripts/baseline/     # committed baseline script set
 scripts/reference/    # gitignored; user-supplied few-shot examples
-plans/                # specs
 runs/                 # gitignored; one subdir per run
 data/                 # gitignored; dataset files
 tests/                # unit + integration tests
