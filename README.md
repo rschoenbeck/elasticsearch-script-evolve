@@ -12,7 +12,7 @@ running that loop with an LLM agent in the driver's seat.
 Each iteration the agent proposes a Painless scoring script (one query
 script plus zero-to-N sort scripts); the harness evaluates it against a
 fixed user cohort on NDCG@10, Recall@10, Precision@10, and ILD@10
-(intra-list diversity); the resulting metrics and the agent's own
+(intra-list distance); the resulting metrics and the agent's own
 rationale feed back into the next iteration's prompt. The aim is to
 compress the post-training tuning cycle while keeping enough structural
 guardrails that the agent has to genuinely improve metrics rather than
