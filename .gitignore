@@ -226,15 +226,12 @@ __marimo__/
 plans/
 tasks/
 
-# Local data files
-/data/
+# Private local data files
+/data/data-private/
 
-# Run artefacts (per-run snapshots, JSONL logs)
+# Run artifacts (per-run snapshots, JSONL logs)
 runs/
 
-# Private script sets kept out of version control:
-#   scripts/reference/ — user-supplied few-shot script sets seeded to the agent
-# The generic baseline at scripts/baseline/ is tracked as the reference
-# implementation of the script-set directory contract.
+# Private script sets kept out of version control
 scripts/reference/
 scripts/baseline/baseline-private/

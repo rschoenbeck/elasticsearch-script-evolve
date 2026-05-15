@@ -46,9 +46,9 @@ _VECTOR_VERSION_KEY = "vectorVersionB"
 _ITEM_VECTOR_KEY = "itemVector"
 _USER_VECTOR_KEYS: tuple[str, ...] = tuple(f"vector{i}" for i in range(1, 11))
 
-_CSV_LOAN_COL = "Loan Details Loan ID"
-_CSV_USER_COL = "User Details Login ID"
-_CSV_COUNT_COL = "Measures: Actions Number of 'Add to Basket' Sessions"
+_CSV_LOAN_COL = "loan_id"
+_CSV_USER_COL = "user_id"
+_CSV_COUNT_COL = "count"
 
 
 class DefaultAdapter:
