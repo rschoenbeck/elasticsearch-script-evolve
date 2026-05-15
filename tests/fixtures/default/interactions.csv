@@ -1,4 +1,4 @@
-Loan Details Loan ID,User Details Login ID,Measures: Actions Number of 'Add to Basket' Sessions
+loan_id,user_id,count
 L1,U1,1
 L2,U1,0
 L1,U2,2
