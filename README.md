@@ -1,12 +1,44 @@
 # Evolutionary agentic retrieval script optimization for Elasticsearch
 
-A single-user research harness where a LangGraph agent iteratively rewrites
-Painless scoring scripts and is graded on IR metrics (NDCG@10, Recall@10,
-Precision@10, ILD@10) against a local Elasticsearch index. Each iteration
-emits **one query script + zero-to-N sort scripts**; the harness owns the
-surrounding query JSON, the eval cohort, the ground truth, and the run log.
+## About
+
+Most recommendation systems combine learned item and user vectors with
+non-vector signals — popularity, recency, diversity, business rules — at a
+scoring layer that sits *after* model training. That layer is usually
+hand-tuned: an engineer edits a scoring formula, evaluates it against
+held-out interactions, edits again. This repo is a research harness for
+running that loop with an LLM agent in the driver's seat.
+
+Each iteration the agent proposes a Painless scoring script (one query
+script plus zero-to-N sort scripts); the harness evaluates it against a
+fixed user cohort on NDCG@10, Recall@10, Precision@10, and ILD@10
+(intra-list diversity); the resulting metrics and the agent's own
+rationale feed back into the next iteration's prompt. The aim is to
+compress the post-training tuning cycle while keeping enough structural
+guardrails that the agent has to genuinely improve metrics rather than
+game the eval.
 
 Day-to-day rules for contributors (humans or agents) live in `AGENTS.md`.
+
+## Design highlights
+
+- **Harness owns the query/sort JSON shape.** The agent edits only
+  Painless `source` strings and the count of sort scripts. It cannot
+  change the eval cohort, the ground truth, the metric implementations,
+  or the params bag — the only way to win is to write a better script.
+- **Symmetric objective + guardrail.** Each run picks a primary metric
+  (`ndcg` or `ild`); the other becomes a guardrail that must hold above
+  baseline. A ranking that wins on one axis by collapsing the other is
+  not a win. All four metrics are logged every iteration regardless of
+  which is primary.
+- **Immutable per-iteration snapshots.** Before evaluation, the candidate
+  scripts are written to `runs/<ts>/iter_NNN/` and the path is recorded
+  in the JSONL log. Compile failures still snapshot the failing source,
+  so the agent can read its own mistake on the next turn.
+- **Lineage flag for evolutionary code development.** `--lineage linear` always edits
+  the previous iteration; `--lineage evolutionary` lets the agent pick a
+  parent from the run history, with a penalty for repeated picks to encourage
+  diverse attempts.
 
 ## Prerequisites
 
@@ -140,6 +172,37 @@ runs/<YYYYMMDD-HHMMSS>/
 
 Snapshots are immutable — compile failures still get a snapshot so the
 agent can read its own mistake.
+
+A `run.jsonl` line is one self-contained record per iteration:
+
+```jsonc
+{"iter": 2,
+ "metrics": {"ndcg@10": 0.0915, "ild@10": 0.3931,
+             "precision@10": 0.0289, "recall@10": 0.1379},
+ "llm_rationale": "Start from baseline mean-pooled vector and add a small
+                   popularity log boost; tests whether global item popularity
+                   improves ranking without using diversity-specific fields.",
+ "parent_iter": 0, "compile_error": null, ...}
+```
+
+`meta.json` records the run-level configuration plus a final summary:
+
+```jsonc
+{
+  "objective": "ndcg",
+  "lineage": "evolutionary",
+  "baseline_metrics": {"ndcg@10": 0.0404, "ild@10": 0.2423, ...},
+  "ild_diversity_fields": ["sector", "country", "partnerId"],
+  "summary": {
+    "best_iter": 10,
+    "best_primary": 0.0939,
+    "guardrail_held": true,
+    "iters_attempted": 10,
+    "final_message": "Best iteration was iter_10 — NDCG 0.0939 (baseline
+                      0.0404), ILD 0.3945 (baseline 0.2423)..."
+  }
+}
+```
 
 ### Re-evaluating a saved script set
 
