@@ -35,10 +35,10 @@ Day-to-day rules for contributors (humans or agents) live in `AGENTS.md`.
   scripts are written to `runs/<ts>/iter_NNN/` and the path is recorded
   in the JSONL log. Compile failures still snapshot the failing source,
   so the agent can read its own mistake on the next turn.
-- **Lineage as a first-class signal.** `--lineage linear` always edits
+- **Lineage flag for evolutionary code development.** `--lineage linear` always edits
   the previous iteration; `--lineage evolutionary` lets the agent pick a
-  parent from the run history, so you can see whether the agent
-  correctly identifies which past attempt is worth building on.
+  parent from the run history, with a penalty for repeated picks to encourage
+  diverse attempts.
 
 ## Prerequisites
 
