@@ -3,21 +3,21 @@ name = "elasticsearch-agentic-script-sorting"
 version = "0.1.0"
 description = "Agentic eval-driven development for Elasticsearch script sorting"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "elasticsearch==8.13.*",
-    "langgraph",
-    "langchain",
-    "langchain-anthropic",
-    "langchain-openai",
-    "pydantic",
-    "python-dotenv",
-    "numpy",
-    "pandas",
-    "pytest",
-    "jupyterlab",
-    "ruff",
-    "matplotlib>=3.10.9",
+    "langgraph>=1.1.10,<2",
+    "langchain>=1.2.18,<2",
+    "langchain-anthropic>=1.4.3,<2",
+    "langchain-openai>=1.2.1,<2",
+    "pydantic>=2.13.4,<3",
+    "python-dotenv>=1.2.2,<2",
+    "numpy>=2.4.4,<3",
+    "pandas>=3.0.2,<4",
+    "pytest>=9.0.3,<10",
+    "jupyterlab>=4.5.7,<5",
+    "ruff>=0.15.12,<1",
+    "matplotlib>=3.10.9,<4",
 ]
 
 [project.scripts]
