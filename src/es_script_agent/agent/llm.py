@@ -43,8 +43,10 @@ def make_llm(provider: str | None = None, model: str | None = None) -> BaseChatM
         if not config.ANTHROPIC_API_KEY:
             raise ValueError("ANTHROPIC_API_KEY is not set in the environment")
         model_id = model or config.ANTHROPIC_MODEL
+        api_key = config.ANTHROPIC_API_KEY
     else:
         if not config.OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY is not set in the environment")
         model_id = model or config.OPENAI_MODEL
-    return init_chat_model(model=model_id, model_provider=name)
+        api_key = config.OPENAI_API_KEY
+    return init_chat_model(model=model_id, model_provider=name, api_key=api_key)
